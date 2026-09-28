@@ -1,9 +1,7 @@
 services:
   - type: web
-    name: diffiq-api
-    runtime: docker
+    name: doc-neww
+    env: docker
     plan: free
-    healthCheckPath: /health
-    envVars:
-      - key: CORS_ORIGINS
-        value: "*"
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
