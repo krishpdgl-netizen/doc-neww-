@@ -149,6 +149,7 @@ var API=window.DIFFIQ_API||'https://doc-neww.onrender.com';
 var allowed=['pdf','docx','xlsx','xlsm','pptx','txt','md','csv'];
 var leftFile=null,rightFile=null,lastResult=null,leftPdfUrl=null,rightPdfUrl=null;
 var pdfJobs={left:0,right:0};
+var pdfFitScale={left:1,right:1};
 var currentIndex=-1,activeFilter='all',hideSame=false,syncScroll=true,syncLock=false;
 var pdfState={left:{pages:[],hits:{}},right:{pages:[],hits:{}}};
 var $=function(id){return document.getElementById(id)};
@@ -220,19 +221,28 @@ function getPageNoForChange(change,side){var b=getBlockForChange(change,side);re
 function getBBoxForChange(change,side){var b=getBlockForChange(change,side);if(!b)return null;var bb=b.bbox||b.box||null;if(!Array.isArray(bb)||bb.length<4)return null;var n=bb.map(Number);return n.every(function(v){return isFinite(v)})?n:null}
 function addCoordinateHit(wrap,change,ci,side,viewport,pageNo){
   var cls=classifyChange(change,side);if(cls==='same')return false;
-  var changePage=getPageNoForChange(change,side);if(changePage&&changePage!==pageNo)return false;
-  var bbox=getBBoxForChange(change,side);if(!bbox)return false;
+  var block=getBlockForChange(change,side);if(!block)return false;
+  var items=Array.isArray(block.diffItems)&&block.diffItems.length?block.diffItems:(Array.isArray(block.items)&&block.items.length?block.items:[]);
+  var usable=items.filter(function(it){return Array.isArray(it.bbox)&&it.bbox.length>=4&&(Number(it.page||block.page||0)===pageNo||!Number(it.page||block.page||0));});
+  if(!usable.length)return false;
   var pageW=Number(viewport.viewBox[2]-viewport.viewBox[0])||Number(viewport.width/viewport.scale);
   var pageH=Number(viewport.viewBox[3]-viewport.viewBox[1])||Number(viewport.height/viewport.scale);
   var scaleX=viewport.width/pageW,scaleY=viewport.height/pageH;
-  var x0=bbox[0]*scaleX,y0=bbox[1]*scaleY,x1=bbox[2]*scaleX,y1=bbox[3]*scaleY;
-  if(x1<x0){var t=x0;x0=x1;x1=t} if(y1<y0){var t2=y0;y0=y1;y1=t2}
-  x0=Math.max(0,Math.min(viewport.width,x0));x1=Math.max(0,Math.min(viewport.width,x1));y0=Math.max(0,Math.min(viewport.height,y0));y1=Math.max(0,Math.min(viewport.height,y1));
-  var hit=document.createElement('div');hit.className='pdf-rect-hit '+cls;hit.dataset.change=String(ci);hit.dataset.page=String(pageNo);
-  hit.style.left=x0+'px';hit.style.top=y0+'px';hit.style.width=Math.max(4,x1-x0)+'px';hit.style.height=Math.max(8,y1-y0)+'px';
-  var layer=wrap.querySelector('.pdf-coordinate-layer');if(layer)layer.appendChild(hit);
-  var state=pdfState[side];if(!state.hits[ci])state.hits[ci]=[];if(state.hits[ci].indexOf(pageNo)<0)state.hits[ci].push(pageNo);
-  return true;
+  var layer=wrap.querySelector('.pdf-coordinate-layer');if(!layer)return false;
+  var state=pdfState[side];if(!state.hits[ci])state.hits[ci]=[];
+  var made=false;
+  usable.forEach(function(it){
+    var bbox=it.bbox.map(Number);if(!bbox.every(function(v){return isFinite(v)}))return;
+    var x0=bbox[0]*scaleX,y0=bbox[1]*scaleY,x1=bbox[2]*scaleX,y1=bbox[3]*scaleY;
+    if(x1<x0){var t=x0;x0=x1;x1=t} if(y1<y0){var t2=y0;y0=y1;y1=t2}
+    x0=Math.max(0,Math.min(viewport.width,x0));x1=Math.max(0,Math.min(viewport.width,x1));y0=Math.max(0,Math.min(viewport.height,y0));y1=Math.max(0,Math.min(viewport.height,y1));
+    if((x1-x0)<1||(y1-y0)<1)return;
+    var hit=document.createElement('div');hit.className='pdf-rect-hit '+cls;hit.dataset.change=String(ci);hit.dataset.page=String(pageNo);
+    hit.style.left=x0+'px';hit.style.top=y0+'px';hit.style.width=Math.max(2,x1-x0)+'px';hit.style.height=Math.max(5,y1-y0)+'px';
+    layer.appendChild(hit);made=true;
+  });
+  if(made&&state.hits[ci].indexOf(pageNo)<0)state.hits[ci].push(pageNo);
+  return made;
 }
 function highlightPage(layer,items,changes,side,pageNo,wrap,viewport){
   var spans=Array.from(layer.querySelectorAll('span'));
@@ -242,19 +252,13 @@ function highlightPage(layer,items,changes,side,pageNo,wrap,viewport){
   changes.forEach(function(change,ci){
     var cls=classifyChange(change,side);if(cls==='same')return;
     var coordinateHit=addCoordinateHit(wrap,change,ci,side,viewport,pageNo);
-    var terms=changeTerms(change,side);
-    if(!terms.length)return;
-    var hit=false;
-    normalizedSpans.forEach(function(txt,si){
-      if(!txt)return;
-      var matched=terms.some(function(term){
-        if(txt.indexOf(term)>=0)return true;
-        var words=tokenWords(term),spanWords=tokenWords(txt);
-        return words.length&&words.some(function(w){return spanWords.indexOf(w)>=0});
-      });
-      if(matched){var sp=spans[si];sp.classList.add('pdf-hit',cls);sp.dataset.change=String(ci);hit=true}
-    });
-    if(hit&&!coordinateHit){if(!state.hits[ci])state.hits[ci]=[];if(state.hits[ci].indexOf(pageNo)<0)state.hits[ci].push(pageNo)}
+    // IMPORTANT: never fall back to a whole block/page bounding box.
+    // A block bbox can span an entire paragraph and makes Word->PDF comparisons
+    // look like the whole document changed. If exact word coordinates are absent,
+    // leave the PDF clean rather than showing a misleading highlight.
+    if(!coordinateHit){
+      return;
+    }
   });
 }
 async function renderPdf(url,container,side,changes){
@@ -267,7 +271,7 @@ async function renderPdf(url,container,side,changes){
     container.innerHTML='';
     for(var n=1;n<=pdf.numPages;n++){
       if(job!==pdfJobs[side])return;
-      var page=await pdf.getPage(n),baseViewport=page.getViewport({scale:1}),fitScale=Math.min(1.05,Math.max(.72,(container.clientWidth-34)/baseViewport.width)),viewport=page.getViewport({scale:fitScale});
+      var page=await pdf.getPage(n),baseViewport=page.getViewport({scale:1}),fitScale=Math.min(1.05,Math.max(.72,(container.clientWidth-34)/baseViewport.width)),viewport=page.getViewport({scale:fitScale}); if(n===1){pdfFitScale[side]=fitScale;var zi=$(side+'Zoom');if(zi)zi.textContent='Fit';}
       var wrap=document.createElement('div');wrap.className='pdf-page';wrap.dataset.page=n;wrap.style.width=viewport.width+'px';wrap.style.height=viewport.height+'px';
       var canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';wrap.appendChild(canvas);
       var layer=document.createElement('div');layer.className='pdf-textLayer';layer.style.width=viewport.width+'px';layer.style.height=viewport.height+'px';wrap.appendChild(layer);var coordLayer=document.createElement('div');coordLayer.className='pdf-coordinate-layer';coordLayer.style.width=viewport.width+'px';coordLayer.style.height=viewport.height+'px';wrap.appendChild(coordLayer);
@@ -287,10 +291,10 @@ async function renderPdf(url,container,side,changes){
 function makePdfView(side,title,fileName){
   var id=side==='left'?'leftPdf':'rightPdf';
   return '<div class="pdf-legend"><span class="legend-dot rem"></span> Removed <span class="legend-dot add"></span> Added <span class="legend-dot mod"></span> Modified</div>'+
-    '<div class="pdf-toolbar"><div class="group"><button class="btn icon small" data-pdf-zoom="'+side+'" data-dir="-1" title="Zoom out">−</button><span class="pdf-page-info" id="'+side+'Zoom">135%</span><button class="btn icon small" data-pdf-zoom="'+side+'" data-dir="1" title="Zoom in">+</button></div>'+
+    '<div class="pdf-toolbar"><div class="group"><button class="btn icon small" data-pdf-zoom="'+side+'" data-dir="-1" title="Zoom out">−</button><span class="pdf-page-info" id="'+side+'Zoom">Fit</span><button class="btn icon small" data-pdf-zoom="'+side+'" data-dir="1" title="Zoom in">+</button></div>'+
     '<div class="group"><button class="btn small" data-pdf-page="'+side+'" data-dir="-1">↑ Prev page</button><span class="pdf-page-info" id="'+side+'Page">Page 1</span><button class="btn small" data-pdf-page="'+side+'" data-dir="1">Next page ↓</button></div></div>'+
     '<div class="pdf-preview" id="'+id+'Preview"><div class="pdf-document"></div></div>'+
-    '<div class="pdf-note">'+(side==='left'?'Original':'Revised')+' PDF. Highlights are placed on matching PDF text-layer content. Click a detected change to jump to its matching page.</div>'+
+    '<div class="pdf-note">'+(side==='left'?'Original':'Revised')+' PDF. Changes are highlighted at word level; scanned pages use OCR. Click a change to jump directly to its location.</div>'+
     '<div class="pdf-diff-label">Detected text differences</div><div class="pdf-diff" id="'+side+'PdfDiff"></div>';
 }
 function renderTokens(tokens){return (tokens||[]).map(function(t){if(t.type==='same')return esc(t.right||t.left||'');if(t.type==='added')return '<span class="word add">'+esc(t.right||'')+'</span> ';if(t.type==='removed')return '<span class="word rem">'+esc(t.left||'')+'</span> ';return '<span class="word mod">'+esc(t.left||'')+' → '+esc(t.right||'')+'</span> '}).join('')}
@@ -393,7 +397,7 @@ function updatePageIndicator(side,container){
 }
 function bindPdfControls(){
   document.addEventListener('click',function(e){
-    var z=e.target.closest('[data-pdf-zoom]');if(z){var side=z.dataset.pdfZoom,dir=Number(z.dataset.dir),state=window.__pdfScale||{left:1.35,right:1.35};state[side]=Math.max(.75,Math.min(2.2,state[side]+dir*.1));window.__pdfScale=state;$(side+'Zoom').textContent=Math.round(state[side]*100)+'%';if(lastResult&&String(lastResult.left.format).toLowerCase()==='pdf'){rerenderPdfSide(side,state[side])}return}
+    var z=e.target.closest('[data-pdf-zoom]');if(z){var side=z.dataset.pdfZoom,dir=Number(z.dataset.dir),state=window.__pdfScale||{left:1.35,right:1.35};state[side]=Math.max(.65,Math.min(2.0,state[side]+dir*.1));window.__pdfScale=state;$(side+'Zoom').textContent=Math.round(state[side]*100)+'%';if(lastResult&&String(lastResult.left.format).toLowerCase()==='pdf'){rerenderPdfSide(side,state[side])}return}
     var p=e.target.closest('[data-pdf-page]');if(p){var side2=p.dataset.pdfPage,dir2=Number(p.dataset.dir),pages=pdfState[side2].pages;if(!pages.length)return;var current=Number(($(side2+'Page').textContent.match(/Page (\\d+)/)||[0,1])[1]),target=Math.max(1,Math.min(pages.length,current+dir2));var pg=pages[target-1],pv=pg&&pg.closest('.pdf-preview');if(pg&&pv)pv.scrollTo({top:Math.max(0,pg.offsetTop-12),behavior:'smooth'});return}
   });
   ['left','right'].forEach(function(side){
@@ -415,7 +419,7 @@ async function renderPdfScaled(url,container,side,changes,scale){
       var page=await pdf.getPage(n),viewport=page.getViewport({scale:scale}),wrap=document.createElement('div');wrap.className='pdf-page';wrap.dataset.page=n;wrap.style.width=viewport.width+'px';wrap.style.height=viewport.height+'px';
       var canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';wrap.appendChild(canvas);
       var layer=document.createElement('div');layer.className='pdf-textLayer';layer.style.width=viewport.width+'px';layer.style.height=viewport.height+'px';wrap.appendChild(layer);var coordLayer=document.createElement('div');coordLayer.className='pdf-coordinate-layer';coordLayer.style.width=viewport.width+'px';coordLayer.style.height=viewport.height+'px';wrap.appendChild(coordLayer);container.appendChild(wrap);pdfState[side].pages.push(wrap);
-      await page.render({canvasContext:canvas.getContext('2d'),viewport:viewport}).promise;var tc=await page.getTextContent(),textDivs=[];await pdfjsLib.renderTextLayer({textContent:tc,container:layer,viewport:viewport,textDivs:textDivs}).promise;highlightPage(layer,tc.items,changes,side,n,wrap,viewport);
+      await page.render({canvasContext:canvas.getContext('2d'),viewport:viewport}).promise;var zi=$(side+'Zoom');if(zi)zi.textContent=Math.round(scale*100)+'%';var tc=await page.getTextContent(),textDivs=[];await pdfjsLib.renderTextLayer({textContent:tc,container:layer,viewport:viewport,textDivs:textDivs}).promise;highlightPage(layer,tc.items,changes,side,n,wrap,viewport);
     }
     if(currentIndex>=0)applyPdfActiveChange(currentIndex);
   }catch(e){if(job===pdfJobs[side])container.innerHTML='<div class="pdf-fallback">Could not update this PDF view.</div>'}
