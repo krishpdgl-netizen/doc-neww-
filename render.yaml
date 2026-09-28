@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: diffiq-pdf-api
-    runtime: docker
-    plan: free
-    envVars:
-      - key: PORT
-        value: "8000"
