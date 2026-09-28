@@ -9,9 +9,6 @@
 <meta name="apple-mobile-web-app-title" content="DiffIQ"/>
 <meta name="theme-color" content="#0d1117"/>
 <title>DiffIQ — Document Change Intelligence</title>
-<link rel="manifest" href="manifest.json"/>
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
-<link rel="apple-touch-icon" href="icon-192.png"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css"/>
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -437,7 +434,7 @@ function readTxt(file){return new Promise((res,rej)=>{const r=new FileReader();r
 // ── Backend config ───────────────────────────────────────────
 // Set this to your Render service URL after deploying.
 // Leave as null to use the pdfjs fallback only.
-const PDF_API = 'https://doc-neww.onrender.com';
+const PDF_API = 'https://diffiq-pdf-api.onrender.com';
 
 // ── Extract content from any file type ───────────────────────
 async function extract(file){
@@ -1565,7 +1562,7 @@ function renderList(){
     } else {
       preview=`<span style="color:var(--text2)">${esc((c.oldText||c.newText).slice(0,80))}${(c.oldText||c.newText).length>80?'…':''}</span>`;
     }
-    d.innerHTML=`<div class="ci-head"><span class="cnum">#${c.id}</span><span class="cbadge ${cbM[c.type]||'cb-mod'}">${c.type}</span><span class="csev ${csM[c.sev]||'cs-low'}">${c.sev}</span></div><div class="ci-text">${preview}</div>${pills?`<div class="ci-pills">${pills}</div>`:''}\`;
+    d.innerHTML=`<div class="ci-head"><span class="cnum">#${c.id}</span><span class="cbadge ${cbM[c.type]||'cb-mod'}">${c.type}</span><span class="csev ${csM[c.sev]||'cs-low'}">${c.sev}</span></div><div class="ci-text">${preview}</div>${pills?`<div class="ci-pills">${pills}</div>`:''}`;
     d.addEventListener('click',()=>setActive(c.id));
     cl.appendChild(d);
   });
@@ -1620,14 +1617,6 @@ document.addEventListener('keydown',e=>{
   if(e.key==='ArrowUp'&&S.active)$('btn-prev').click();
 });
 
-// ── Service Worker ────────────────────────────────────────────
-if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('sw.js')
-      .then(r=>console.log('[DiffIQ] SW registered'))
-      .catch(e=>console.warn('[DiffIQ] SW failed',e));
-  });
-}
 </script>
 </body>
 </html>
