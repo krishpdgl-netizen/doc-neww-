@@ -17,7 +17,7 @@
 .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}.metric{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:17px 18px;box-shadow:0 2px 8px rgba(16,24,40,.05);position:relative;overflow:hidden}.metric:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#d0d5dd}.metric.sim:before{background:#635bff}.metric.mod:before{background:#f79009}.metric.add:before{background:#12b76a}.metric.rem:before{background:#f04438}.metric b{display:block;font-size:25px;letter-spacing:-.7px;margin-bottom:4px}.metric span{color:var(--muted);font-size:12px;font-weight:600}
 .workspace{display:grid;grid-template-columns:310px 1fr;gap:14px}.changes,.viewer{background:var(--surface);border:1px solid var(--line);border-radius:15px;overflow:hidden;box-shadow:0 2px 8px rgba(16,24,40,.05)}.changes-head,.viewer-head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;background:#fff}.changes-head b,.viewer-head b{font-size:13px}.count-pill{background:#f2f4f7;color:#475467;border-radius:20px;padding:4px 8px;font-size:11px;font-weight:750}.change-list{max-height:670px;overflow:auto}.change{padding:13px 15px;border-bottom:1px solid #eef1f5;cursor:pointer}.change:hover{background:#f8fafc}.badge{font-size:10px;border-radius:20px;padding:4px 7px;font-weight:800;text-transform:uppercase;letter-spacing:.3px}.badge.add{background:var(--add);color:var(--addt)}.badge.rem{background:var(--del);color:var(--delt)}.badge.mod{background:var(--mod);color:var(--modt)}.badge.same{background:var(--same);color:#667085}.change-text{margin-top:7px;color:#475467;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
 .sides{display:grid;grid-template-columns:1fr 1fr;min-height:550px}.side{border-right:1px solid var(--line);min-width:0}.side:last-child{border-right:0}.side-title{padding:11px 14px;background:#f8fafc;color:#667085;font-size:12px;font-weight:700;position:sticky;top:0;z-index:2;border-bottom:1px solid #eef1f5}.block{padding:11px 14px;border-bottom:1px solid #eef1f5;line-height:1.55;white-space:pre-wrap;min-height:42px}.block.add{background:var(--add)}.block.rem{background:var(--del)}.block.mod{background:var(--mod)}.block.same{color:#475467}.word.rem{background:#ffd9df;color:#9e1638;text-decoration:line-through;border-radius:4px;padding:1px 3px}.word.add{background:#b7f0d0;color:#05603a;border-radius:4px;padding:1px 3px}.word.mod{background:#ffe7a8;color:#7a4b00;border-radius:4px;padding:1px 3px}.empty{padding:60px 25px;text-align:center;color:#98a2b3}.spinner{display:inline-block;width:13px;height:13px;border:2px solid #d0d5dd;border-top-color:var(--accent);border-radius:50%;animation:r .7s linear infinite;margin-right:7px;vertical-align:-2px}.footer-note{margin-top:18px;text-align:center;color:#98a2b3;font-size:11px}@keyframes r{to{transform:rotate(360deg)}}
-@media(max-width:1050px){.metrics{grid-template-columns:repeat(3,1fr)}.workspace{grid-template-columns:250px 1fr}}@media(max-width:800px){.top{padding:0 18px}.top .sub{display:none}.main{padding:28px 16px 50px}.hero{display:block}.hero h1{font-size:32px}.actions{margin-top:18px}.uploads,.workspace,.sides{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.side{border-right:0;border-bottom:1px solid var(--line)}.side:last-child{border-bottom:0}}@media(max-width:500px){.compare-shell{padding:12px}.drop{padding:17px}.hero h1{font-size:28px}}
+.pdf-preview{height:720px;background:#f3f5f8;border-bottom:1px solid var(--line);padding:10px}.pdf-frame{width:100%;height:100%;display:block;border:1px solid #dfe3e8;border-radius:10px;background:#fff}.pdf-fallback{height:100%;display:flex;align-items:center;justify-content:center;text-align:center;color:#667085;font-size:13px;padding:24px}.pdf-diff-label{padding:12px 14px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:11px;font-weight:800;color:#667085;text-transform:uppercase;letter-spacing:.5px}.pdf-diff{min-height:180px}.pdf-diff .block{border-bottom:1px solid #eef1f5}.pdf-note{padding:10px 14px;background:#fff8e6;color:#7a5b00;border-bottom:1px solid #f0dfae;font-size:12px;line-height:1.45}@media(max-width:1050px){.metrics{grid-template-columns:repeat(3,1fr)}.workspace{grid-template-columns:250px 1fr}}@media(max-width:800px){.top{padding:0 18px}.top .sub{display:none}.main{padding:28px 16px 50px}.hero{display:block}.hero h1{font-size:32px}.actions{margin-top:18px}.uploads,.workspace,.sides{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.side{border-right:0;border-bottom:1px solid var(--line)}.side:last-child{border-bottom:0}}@media(max-width:500px){.compare-shell{padding:12px}.drop{padding:17px}.hero h1{font-size:28px}}
 </style>
 </head>
 <body>
@@ -39,7 +39,7 @@
 <script>
 (function(){
 var API=window.DIFFIQ_API||'https://doc-neww.onrender.com';
-var leftFile=null,rightFile=null,lastResult=null;
+var leftFile=null,rightFile=null,lastResult=null;var leftPdfUrl=null,rightPdfUrl=null;
 var $=function(id){return document.getElementById(id)};
 function setStatus(msg,loading){$('status').innerHTML=loading?'<span class="spinner"></span>'+msg:msg;}
 function bindDrop(drop,input,side){
@@ -48,9 +48,11 @@ function bindDrop(drop,input,side){
  drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('drag');if(e.dataTransfer.files[0]) choose(e.dataTransfer.files[0],side)});
  input.addEventListener('change',function(){if(input.files[0]) choose(input.files[0],side)});
 }
+function revokePdfUrl(side){var key=side==='left'?'leftPdfUrl':'rightPdfUrl';if(window[key]){URL.revokeObjectURL(window[key]);window[key]=null}}
 function choose(file,side){
  var allowed=['pdf','docx','xlsx','xlsm','pptx','txt','md','csv'];var e=file.name.toLowerCase().split('.').pop();
  if(allowed.indexOf(e)<0){setStatus('Unsupported file type: '+e);return}
+ revokePdfUrl(side);if(e==='pdf'){if(side==='left')leftPdfUrl=URL.createObjectURL(file);else rightPdfUrl=URL.createObjectURL(file)}
  if(side==='left'){leftFile=file;$('leftFile').innerHTML='<span class="file-name">'+esc(file.name)+'</span><span class="file-ext">'+e+'</span>'}else{rightFile=file;$('rightFile').innerHTML='<span class="file-name">'+esc(file.name)+'</span><span class="file-ext">'+e+'</span>'}
  $('compareBtn').disabled=!(leftFile&&rightFile);
  if(leftFile&&rightFile){var a=leftFile.name.split('.').pop().toLowerCase(),b=rightFile.name.split('.').pop().toLowerCase();if(a!==b)setStatus('Use the same file format for structural comparison.')} }
@@ -60,10 +62,16 @@ function blockText(change,side){var b=side==='left'?change.left:change.right;if(
 function renderResult(r){
  lastResult=r;$('dashboard').style.display='block';$('mSimilarity').textContent=r.similarity+'%';$('mModified').textContent=r.summary.modified;$('mAdded').textContent=r.summary.added;$('mRemoved').textContent=r.summary.removed;$('mSame').textContent=r.summary.same;$('changeCount').textContent=r.changes.length;$('formatInfo').textContent=(r.left.format||'').toUpperCase();$('leftTitle').textContent=r.files.left;$('rightTitle').textContent=r.files.right;
  var cl=$('changeList'),lv=$('leftView'),rv=$('rightView');cl.innerHTML='';lv.innerHTML='';rv.innerHTML='';
+ var isPdf=(String(r.left.format||'').toLowerCase()==='pdf');
+ if(isPdf){
+   lv.innerHTML='<div class="pdf-preview"><iframe class="pdf-frame" title="'+esc(r.files.left)+'" src="'+leftPdfUrl+'#page=1&zoom=page-width"></iframe></div><div class="pdf-note">Original PDF preview. The extracted difference blocks are shown below so you can jump to the detected changes.</div><div class="pdf-diff-label">Detected text differences</div><div class="pdf-diff" id="leftPdfDiff"></div>';
+   rv.innerHTML='<div class="pdf-preview"><iframe class="pdf-frame" title="'+esc(r.files.right)+'" src="'+rightPdfUrl+'#page=1&zoom=page-width"></iframe></div><div class="pdf-note">Revised PDF preview. The extracted difference blocks are shown below so you can review exactly what changed.</div><div class="pdf-diff-label">Detected text differences</div><div class="pdf-diff" id="rightPdfDiff"></div>';
+ }
+ var leftContainer=isPdf?$('leftPdfDiff'):lv;var rightContainer=isPdf?$('rightPdfDiff'):rv;
  r.changes.forEach(function(c,i){var d=document.createElement('div');d.className='change';var label=c.type==='removed'?'Removed':c.type==='added'?'Added':c.type==='modified'?'Modified':'Same';var cls=c.type==='removed'?'rem':c.type==='added'?'add':c.type==='modified'?'mod':'same';var b=c.left||c.right;d.innerHTML='<span class="badge '+cls+'">'+label+'</span><div class="change-text">'+esc(b?b.text:'')+'</div>';d.onclick=function(){var x=document.getElementById('chg-'+i);if(x)x.scrollIntoView({behavior:'smooth',block:'center'})};cl.appendChild(d);
- var ld=document.createElement('div');ld.id='chg-'+i;ld.innerHTML=blockText(c,'left');lv.appendChild(ld);var rd=document.createElement('div');rd.innerHTML=blockText(c,'right');rv.appendChild(rd);
+   var ld=document.createElement('div');ld.id='chg-'+i;ld.innerHTML=blockText(c,'left');leftContainer.appendChild(ld);var rd=document.createElement('div');rd.innerHTML=blockText(c,'right');rightContainer.appendChild(rd);
  });
- if(!r.changes.length){lv.innerHTML='<div class="empty">No content differences found.</div>';rv.innerHTML='<div class="empty">No content differences found.</div>'}
+ if(!r.changes.length){leftContainer.innerHTML='<div class="empty">No content differences found.</div>';rightContainer.innerHTML='<div class="empty">No content differences found.</div>'}
 }
 $('compareBtn').addEventListener('click',async function(){
  if(!leftFile||!rightFile)return;var le=leftFile.name.toLowerCase().split('.').pop(),re=rightFile.name.toLowerCase().split('.').pop();if(le!==re){setStatus('Both files must have the same format.');return}
@@ -72,7 +80,7 @@ $('compareBtn').addEventListener('click',async function(){
 });
 $('reportBtn').addEventListener('click',function(){if(!lastResult)return;var blob=new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='diffiq-report.json';a.click();URL.revokeObjectURL(a.href)});
 $('newBtn').addEventListener('click',function(){location.reload()});
-bindDrop($('leftDrop'),$('leftInput'),'left');bindDrop($('rightDrop'),$('rightInput'),'right');
+bindDrop($('leftDrop'),$('leftInput'),'left');bindDrop($('rightDrop'),$('rightInput'),'right');window.addEventListener('beforeunload',function(){revokePdfUrl('left');revokePdfUrl('right')});
 })();
 </script>
 </body></html>
