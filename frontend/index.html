@@ -116,7 +116,6 @@ button:focus-visible,input:focus-visible{outline:3px solid rgba(99,91,255,.2);ou
           <button class="filter" data-filter="modified">Modified</button>
           <button class="filter" data-filter="added">Added</button>
           <button class="filter" data-filter="removed">Removed</button>
-          <button class="filter" data-filter="same">Same</button>
         </div>
       </div>
       <div class="change-list" id="changeList"></div>
@@ -304,12 +303,20 @@ function blockText(change,side){
 function changeLabel(type){return type==='removed'?'Removed':type==='added'?'Added':type==='modified'?'Modified':'Same'}
 function changeCls(type){return type==='removed'?'rem':type==='added'?'add':type==='modified'?'mod':'same'}
 function changeText(c){var b=c.type==='added'?c.right:c.left;return b&&b.text?b.text:(c.right&&c.right.text)||(c.left&&c.left.text)||'Detected change'}
+function isRealChange(c){
+  var type=String(c&&c.type||'').toLowerCase();
+  return type==='modified'||type==='added'||type==='removed';
+}
+function realChangeIndices(){
+  if(!lastResult||!Array.isArray(lastResult.changes))return [];
+  return lastResult.changes.map(function(c,i){return isRealChange(c)?i:-1}).filter(function(i){return i>=0});
+}
 function visibleChanges(){
   if(!lastResult)return [];
   var q=normalizeText($('changeSearch').value||'');
   return lastResult.changes.map(function(c,i){return {c:c,i:i}}).filter(function(x){
-    var type=x.c.type||'same',text=normalizeText(changeText(x.c));
-    return (activeFilter==='all'||type===activeFilter)&&(!q||text.indexOf(q)>=0);
+    var type=String(x.c.type||'').toLowerCase(),text=normalizeText(changeText(x.c));
+    return isRealChange(x.c)&&(activeFilter==='all'||type===activeFilter)&&(!q||text.indexOf(q)>=0);
   });
 }
 function renderChangeList(){
@@ -322,13 +329,17 @@ function renderChangeList(){
     d.addEventListener('click',function(){focusChange(i,true)});list.appendChild(d);
   });
 }
-function updateNav(){var total=lastResult?lastResult.changes.length:0;$('prevBtn').disabled=total===0;$('nextBtn').disabled=total===0}
+function updateNav(){
+  var total=realChangeIndices().length;
+  $('prevBtn').disabled=total===0;
+  $('nextBtn').disabled=total===0;
+}
 function applyPdfActiveChange(index){
   document.querySelectorAll('.pdf-textLayer .pdf-hit.active-change,.pdf-coordinate-layer .pdf-rect-hit.active-change').forEach(function(el){el.classList.remove('active-change')});
   document.querySelectorAll('.pdf-textLayer .pdf-hit[data-change="'+index+'"],.pdf-coordinate-layer .pdf-rect-hit[data-change="'+index+'"]').forEach(function(el){el.classList.add('active-change')});
 }
 function focusChange(index,notify){
-  if(!lastResult||index<0||index>=lastResult.changes.length)return;
+  if(!lastResult||index<0||index>=lastResult.changes.length||!isRealChange(lastResult.changes[index]))return;
   currentIndex=index;renderChangeList();
   applyPdfActiveChange(index);
   var item=document.querySelector('.change[data-index="'+index+'"]');if(item)item.scrollIntoView({behavior:'smooth',block:'nearest'});
@@ -346,10 +357,13 @@ function focusChange(index,notify){
   if(notify)toast(changeLabel(type)+' change '+(index+1)+' selected');
 }
 function renderResult(r){
-  lastResult=r;currentIndex=r.changes.length?0:-1;activeFilter='all';hideSame=false;$('dashboard').style.display='block';
+  lastResult=r;
+  var firstReal=realChangeIndices()[0];
+  currentIndex=firstReal==null?-1:firstReal;
+  activeFilter='all';hideSame=false;$('dashboard').style.display='block';
   $('mSimilarity').textContent=(r.similarity==null?'—':r.similarity+'%');$('mModified').textContent=r.summary&&r.summary.modified||0;$('mAdded').textContent=r.summary&&r.summary.added||0;$('mRemoved').textContent=r.summary&&r.summary.removed||0;$('mSame').textContent=r.summary&&r.summary.same||0;
-  $('changeCount').textContent=r.changes.length;$('formatInfo').textContent=(r.left&&r.left.format||'').toUpperCase();$('leftTitle').textContent=r.files&&r.files.left||leftFile.name;$('rightTitle').textContent=r.files&&r.files.right||rightFile.name;
-  $('resultSubtitle').textContent=r.changes.length+' detected change blocks · '+(r.similarity==null?'':r.similarity+'% similarity');
+  $('changeCount').textContent=realChangeIndices().length;$('formatInfo').textContent=(r.left&&r.left.format||'').toUpperCase();$('leftTitle').textContent=r.files&&r.files.left||leftFile.name;$('rightTitle').textContent=r.files&&r.files.right||rightFile.name;
+  $('resultSubtitle').textContent=realChangeIndices().length+' detected change blocks · '+(r.similarity==null?'':r.similarity+'% similarity');
   $('reportBtn').disabled=false;$('printBtn').disabled=false;updateNav();
   $('changeSearch').value='';document.querySelectorAll('.filter').forEach(function(b){b.classList.toggle('active',b.dataset.filter==='all')});
   var cl=$('changeList'),lv=$('leftView'),rv=$('rightView');cl.innerHTML='';lv.innerHTML='';rv.innerHTML='';pdfState={left:{pages:[],hits:{}},right:{pages:[],hits:{}}};
@@ -360,7 +374,8 @@ function renderResult(r){
   }
   var leftContainer=isPdf?$('leftPdfDiff'):lv,rightContainer=isPdf?$('rightPdfDiff'):rv;
   r.changes.forEach(function(c,i){
-    var d=document.createElement('div');d.className='change';d.dataset.index=i;d.innerHTML='<span class="badge '+changeCls(c.type)+'">'+changeLabel(c.type)+'</span><div class="change-text">'+esc(changeText(c))+'</div><div class="change-meta">Change '+(i+1)+' of '+r.changes.length+'</div>';
+    if(!isRealChange(c))return;
+    var d=document.createElement('div');d.className='change';d.dataset.index=i;d.innerHTML='<span class="badge '+changeCls(c.type)+'">'+changeLabel(c.type)+'</span><div class="change-text">'+esc(changeText(c))+'</div><div class="change-meta">Change '+(realChangeIndices().indexOf(i)+1)+' of '+realChangeIndices().length+'</div>';
     d.addEventListener('click',function(){focusChange(i,true)});cl.appendChild(d);
     var ld=document.createElement('div');ld.id='chg-left-'+i;ld.dataset.changeBlock=i;ld.innerHTML=blockText(c,'left');if(hideSame&&c.type==='same')ld.style.display='none';leftContainer.appendChild(ld);
     var rd=document.createElement('div');rd.id='chg-right-'+i;rd.dataset.changeBlock=i;rd.innerHTML=blockText(c,'right');if(hideSame&&c.type==='same')rd.style.display='none';rightContainer.appendChild(rd);
@@ -430,14 +445,29 @@ $('compareBtn').addEventListener('click',async function(){
     try{data=await res.json()}catch(_){throw new Error('The comparison service returned an invalid response.')}
     if(!res.ok)throw new Error(data.detail||'Server returned '+res.status);
     if(!data.summary||!Array.isArray(data.changes))throw new Error('The comparison response is missing expected result fields.');
-    renderResult(data);setStatus('Comparison complete. '+data.changes.length+' change blocks analysed.');toast('Comparison complete');
+    renderResult(data);setStatus('Comparison complete. '+realChangeIndices().length+' changes detected.');toast('Comparison complete');
   }catch(e){setStatus('Comparison failed: '+e.message,false,true);$('dashboard').style.display='none'}finally{$('compareBtn').disabled=false}
 });
 $('reportBtn').addEventListener('click',exportJson);$('printBtn').addEventListener('click',printReport);
 $('newBtn').addEventListener('click',function(){location.reload()});
-$('prevBtn').addEventListener('click',function(){if(lastResult&&lastResult.changes.length)focusChange((currentIndex-1+lastResult.changes.length)%lastResult.changes.length,true)});
-$('nextBtn').addEventListener('click',function(){if(lastResult&&lastResult.changes.length)focusChange((currentIndex+1)%lastResult.changes.length,true)});
-document.addEventListener('keydown',function(e){if(!lastResult||!lastResult.changes.length)return;if(e.key==='ArrowUp'&&!e.ctrlKey&&!e.metaKey){e.preventDefault();focusChange((currentIndex-1+lastResult.changes.length)%lastResult.changes.length,true)}else if(e.key==='ArrowDown'&&!e.ctrlKey&&!e.metaKey){e.preventDefault();focusChange((currentIndex+1)%lastResult.changes.length,true)}});
+$('prevBtn').addEventListener('click',function(){
+  var ids=realChangeIndices();if(!ids.length)return;
+  var pos=ids.indexOf(currentIndex);if(pos<0)pos=0;
+  focusChange(ids[(pos-1+ids.length)%ids.length],true);
+});
+$('nextBtn').addEventListener('click',function(){
+  var ids=realChangeIndices();if(!ids.length)return;
+  var pos=ids.indexOf(currentIndex);if(pos<0)pos=-1;
+  focusChange(ids[(pos+1)%ids.length],true);
+});
+document.addEventListener('keydown',function(e){
+  var ids=realChangeIndices();if(!ids.length)return;
+  if(e.key==='ArrowUp'&&!e.ctrlKey&&!e.metaKey){
+    e.preventDefault();var pos=ids.indexOf(currentIndex);if(pos<0)pos=0;focusChange(ids[(pos-1+ids.length)%ids.length],true);
+  }else if(e.key==='ArrowDown'&&!e.ctrlKey&&!e.metaKey){
+    e.preventDefault();var pos2=ids.indexOf(currentIndex);if(pos2<0)pos2=-1;focusChange(ids[(pos2+1)%ids.length],true);
+  }
+});
 $('changeSearch').addEventListener('input',renderChangeList);
 document.querySelectorAll('.filter').forEach(function(b){b.addEventListener('click',function(){activeFilter=b.dataset.filter;document.querySelectorAll('.filter').forEach(function(x){x.classList.remove('active')});b.classList.add('active');renderChangeList()})});
 $('syncBtn').addEventListener('click',function(){syncScroll=!syncScroll;$('syncBtn').textContent='⇆ Sync scroll: '+(syncScroll?'On':'Off')});
