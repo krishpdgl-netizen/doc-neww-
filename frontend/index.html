@@ -3,84 +3,428 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DiffIQ — Document Difference Engine</title>
+<meta name="theme-color" content="#635bff">
+<title>DiffIQ — Professional Document Comparison</title>
 <style>
-:root{--bg:#f6f8fc;--surface:#fff;--surface2:#f8fafc;--line:#e5eaf1;--text:#101828;--muted:#667085;--accent:#635bff;--accent2:#5148e5;--add:#ecfdf3;--addt:#067647;--del:#fff1f3;--delt:#c01048;--mod:#fffaeb;--modt:#b54708;--same:#f2f4f7;--shadow:0 10px 35px rgba(16,24,40,.07)}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{transition:.18s ease}.app{min-height:100vh}
-.top{height:72px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 34px;background:rgba(255,255,255,.92);backdrop-filter:blur(14px);position:sticky;top:0;z-index:20}.brand-wrap{display:flex;align-items:center;gap:12px}.logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#635bff,#8b83ff);display:grid;place-items:center;color:#fff;font-weight:900;box-shadow:0 5px 14px rgba(99,91,255,.25)}.brand{font-weight:850;font-size:20px;letter-spacing:-.4px}.brand span{color:var(--accent)}.sub{color:var(--muted);font-size:12px}.top .sub{padding-left:12px;border-left:1px solid var(--line)}
-.main{max-width:1380px;margin:auto;padding:42px 28px 70px}.hero{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;margin-bottom:30px}.eyebrow{display:inline-flex;align-items:center;gap:7px;color:var(--accent);font-size:12px;font-weight:750;margin-bottom:10px}.eyebrow i{width:7px;height:7px;background:#12b76a;border-radius:50%;display:block;box-shadow:0 0 0 4px #e7f8ef}.hero h1{font-size:40px;line-height:1.08;letter-spacing:-1.6px;margin:0 0 10px}.hero p{color:var(--muted);margin:0;max-width:650px;font-size:15px;line-height:1.6}.actions{display:flex;gap:10px;flex-wrap:wrap}
-.btn{border:1px solid #d9e0e8;background:#fff;color:var(--text);padding:11px 16px;border-radius:10px;cursor:pointer;font-weight:650;box-shadow:0 2px 8px rgba(16,24,40,.05)}.btn:hover:not(:disabled){transform:translateY(-1px);border-color:#c7ced8}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 7px 18px rgba(99,91,255,.2)}.btn.primary:hover:not(:disabled){background:var(--accent2)}.btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
-.compare-shell{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow)}.compare-label{font-size:13px;font-weight:750;margin:2px 4px 14px}.uploads{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.drop{border:1.5px dashed #cbd5e1;border-radius:14px;background:var(--surface2);padding:22px;min-height:185px;cursor:pointer;transition:.2s;position:relative;overflow:hidden}.drop:hover,.drop.drag{border-color:var(--accent);background:#fafaff;box-shadow:0 0 0 4px rgba(99,91,255,.07)}.drop input{display:none}.drop-top{display:flex;justify-content:space-between;align-items:center;gap:12px}.drop h3{margin:0 0 6px;font-size:15px}.drop p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}.upload-icon{width:42px;height:42px;border-radius:12px;background:#eeecff;color:var(--accent);display:grid;place-items:center;font-size:19px;font-weight:800}.file{margin-top:18px;padding:11px 12px;border:1px solid var(--line);background:#fff;border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:42px}.file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}.file-empty{color:#98a2b3;font-weight:500}.file-ext{font-size:10px;text-transform:uppercase;background:#f2f4f7;color:#475467;border-radius:6px;padding:4px 6px;font-weight:800;flex:none}
-.status{margin:14px 4px 2px;color:var(--muted);min-height:21px;font-size:13px}.notice{background:#f7f7ff;border:1px solid #dfddff;padding:11px 13px;border-radius:10px;color:#5148e5;margin-top:10px;font-size:12px}
-.dashboard{display:none;margin-top:30px}.result-heading{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:14px}.result-heading h2{margin:0;font-size:20px;letter-spacing:-.4px}.result-heading p{margin:4px 0 0;color:var(--muted)}
-.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0}.metric{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:17px 18px;box-shadow:0 2px 8px rgba(16,24,40,.05);position:relative;overflow:hidden}.metric:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#d0d5dd}.metric.sim:before{background:#635bff}.metric.mod:before{background:#f79009}.metric.add:before{background:#12b76a}.metric.rem:before{background:#f04438}.metric b{display:block;font-size:25px;letter-spacing:-.7px;margin-bottom:4px}.metric span{color:var(--muted);font-size:12px;font-weight:600}
-.workspace{display:grid;grid-template-columns:310px 1fr;gap:14px}.changes,.viewer{background:var(--surface);border:1px solid var(--line);border-radius:15px;overflow:hidden;box-shadow:0 2px 8px rgba(16,24,40,.05)}.changes-head,.viewer-head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;background:#fff}.changes-head b,.viewer-head b{font-size:13px}.count-pill{background:#f2f4f7;color:#475467;border-radius:20px;padding:4px 8px;font-size:11px;font-weight:750}.change-list{max-height:670px;overflow:auto}.change{padding:13px 15px;border-bottom:1px solid #eef1f5;cursor:pointer}.change:hover{background:#f8fafc}.badge{font-size:10px;border-radius:20px;padding:4px 7px;font-weight:800;text-transform:uppercase;letter-spacing:.3px}.badge.add{background:var(--add);color:var(--addt)}.badge.rem{background:var(--del);color:var(--delt)}.badge.mod{background:var(--mod);color:var(--modt)}.badge.same{background:var(--same);color:#667085}.change-text{margin-top:7px;color:#475467;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
-.sides{display:grid;grid-template-columns:1fr 1fr;min-height:550px}.side{border-right:1px solid var(--line);min-width:0}.side:last-child{border-right:0}.side-title{padding:11px 14px;background:#f8fafc;color:#667085;font-size:12px;font-weight:700;position:sticky;top:0;z-index:2;border-bottom:1px solid #eef1f5}.block{padding:11px 14px;border-bottom:1px solid #eef1f5;line-height:1.55;white-space:pre-wrap;min-height:42px}.block.add{background:var(--add)}.block.rem{background:var(--del)}.block.mod{background:var(--mod)}.block.same{color:#475467}.word.rem{background:#ffd9df;color:#9e1638;text-decoration:line-through;border-radius:4px;padding:1px 3px}.word.add{background:#b7f0d0;color:#05603a;border-radius:4px;padding:1px 3px}.word.mod{background:#ffe7a8;color:#7a4b00;border-radius:4px;padding:1px 3px}.empty{padding:60px 25px;text-align:center;color:#98a2b3}.spinner{display:inline-block;width:13px;height:13px;border:2px solid #d0d5dd;border-top-color:var(--accent);border-radius:50%;animation:r .7s linear infinite;margin-right:7px;vertical-align:-2px}.footer-note{margin-top:18px;text-align:center;color:#98a2b3;font-size:11px}@keyframes r{to{transform:rotate(360deg)}}
-.pdf-preview{height:720px;background:#f3f5f8;border-bottom:1px solid var(--line);padding:10px}.pdf-frame{width:100%;height:100%;display:block;border:1px solid #dfe3e8;border-radius:10px;background:#fff}.pdf-fallback{height:100%;display:flex;align-items:center;justify-content:center;text-align:center;color:#667085;font-size:13px;padding:24px}.pdf-diff-label{padding:12px 14px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:11px;font-weight:800;color:#667085;text-transform:uppercase;letter-spacing:.5px}.pdf-diff{min-height:180px}.pdf-diff .block{border-bottom:1px solid #eef1f5}.pdf-note{padding:10px 14px;background:#fff8e6;color:#7a5b00;border-bottom:1px solid #f0dfae;font-size:12px;line-height:1.45}@media(max-width:1050px){.metrics{grid-template-columns:repeat(3,1fr)}.workspace{grid-template-columns:250px 1fr}}@media(max-width:800px){.top{padding:0 18px}.top .sub{display:none}.main{padding:28px 16px 50px}.hero{display:block}.hero h1{font-size:32px}.actions{margin-top:18px}.uploads,.workspace,.sides{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.side{border-right:0;border-bottom:1px solid var(--line)}.side:last-child{border-bottom:0}}@media(max-width:500px){.compare-shell{padding:12px}.drop{padding:17px}.hero h1{font-size:28px}}
+:root{
+  --bg:#f5f7fb;--surface:#fff;--surface2:#f8fafc;--line:#e4e7ec;--line2:#eef1f5;
+  --text:#101828;--muted:#667085;--muted2:#98a2b3;--accent:#635bff;--accent2:#5148e5;
+  --green:#12b76a;--green-bg:#ecfdf3;--green-t:#067647;
+  --red:#f04438;--red-bg:#fff1f3;--red-t:#c01048;
+  --amber:#f79009;--amber-bg:#fffaeb;--amber-t:#b54708;
+  --shadow:0 12px 34px rgba(16,24,40,.07);--radius:16px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input{font:inherit}
+button{transition:.16s ease}
+button:focus-visible,input:focus-visible{outline:3px solid rgba(99,91,255,.2);outline-offset:2px}
+.app{min-height:100vh}
+.top{height:70px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 30px;background:rgba(255,255,255,.94);backdrop-filter:blur(14px);position:sticky;top:0;z-index:100}
+.brand-wrap{display:flex;align-items:center;gap:11px}.logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#635bff,#8c84ff);display:grid;place-items:center;color:#fff;font-weight:900;box-shadow:0 6px 16px rgba(99,91,255,.24)}.brand{font-weight:850;font-size:20px;letter-spacing:-.45px}.brand span{color:var(--accent)}.sub{font-size:12px;color:var(--muted);padding-left:12px;border-left:1px solid var(--line)}
+.main{max-width:1500px;margin:auto;padding:38px 26px 70px}
+.hero{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;margin-bottom:26px}.eyebrow{display:inline-flex;align-items:center;gap:8px;color:var(--accent);font-size:12px;font-weight:800;margin-bottom:9px}.eyebrow i{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px #e7f8ef}.hero h1{margin:0 0 9px;font-size:39px;line-height:1.06;letter-spacing:-1.7px}.hero p{margin:0;color:var(--muted);font-size:15px;line-height:1.6;max-width:690px}.actions{display:flex;gap:9px;flex-wrap:wrap}
+.btn{border:1px solid #d9e0e8;background:#fff;color:var(--text);padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:700;box-shadow:0 2px 8px rgba(16,24,40,.045)}.btn:hover:not(:disabled){transform:translateY(-1px);border-color:#c5ccd6}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 8px 18px rgba(99,91,255,.2)}.btn.primary:hover:not(:disabled){background:var(--accent2)}.btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}.btn.small{padding:7px 10px;font-size:12px}.btn.icon{width:34px;height:34px;padding:0;display:grid;place-items:center}
+.compare-shell{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow)}.compare-label{font-size:13px;font-weight:800;margin:1px 4px 13px}.uploads{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.drop{border:1.5px dashed #cbd5e1;border-radius:14px;background:var(--surface2);padding:21px;min-height:178px;cursor:pointer;position:relative;overflow:hidden;transition:.2s}.drop:hover,.drop.drag{border-color:var(--accent);background:#fbfaff;box-shadow:0 0 0 4px rgba(99,91,255,.06)}.drop input{display:none}.drop-top{display:flex;justify-content:space-between;align-items:center;gap:12px}.drop h3{margin:0 0 5px;font-size:15px}.drop p{margin:0;color:var(--muted);font-size:12px;line-height:1.5}.upload-icon{width:42px;height:42px;border-radius:12px;background:#eeecff;color:var(--accent);display:grid;place-items:center;font-size:18px;font-weight:900}.file{margin-top:17px;padding:10px 12px;border:1px solid var(--line);background:#fff;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:42px}.file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}.file-empty{color:var(--muted2);font-weight:500}.file-ext,.format-pill{font-size:10px;text-transform:uppercase;background:#f2f4f7;color:#475467;border-radius:7px;padding:4px 7px;font-weight:850;flex:none}
+.status-row{display:flex;align-items:center;justify-content:space-between;gap:15px;margin:13px 4px 0;min-height:25px}.status{color:var(--muted);font-size:13px}.status.error{color:var(--red-t);font-weight:650}.spinner{display:inline-block;width:13px;height:13px;border:2px solid #d0d5dd;border-top-color:var(--accent);border-radius:50%;animation:r .7s linear infinite;margin-right:7px;vertical-align:-2px}
+.notice{margin-top:10px;background:#f7f7ff;border:1px solid #dfddff;padding:10px 12px;border-radius:10px;color:#5148e5;font-size:12px;line-height:1.45}
+.dashboard{display:none;margin-top:30px}.result-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:14px}.result-heading h2{margin:0;font-size:21px;letter-spacing:-.5px}.result-heading p{margin:4px 0 0;color:var(--muted)}.result-actions{display:flex;gap:7px;flex-wrap:wrap}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:11px;margin:17px 0}.metric{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 17px;box-shadow:0 2px 8px rgba(16,24,40,.045);position:relative;overflow:hidden}.metric:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#d0d5dd}.metric.sim:before{background:var(--accent)}.metric.mod:before{background:var(--amber)}.metric.add:before{background:var(--green)}.metric.rem:before{background:var(--red)}.metric b{display:block;font-size:25px;letter-spacing:-.7px;margin-bottom:4px}.metric span{color:var(--muted);font-size:12px;font-weight:650}
+.workspace{display:grid;grid-template-columns:320px minmax(0,1fr);gap:14px}.changes,.viewer{background:#fff;border:1px solid var(--line);border-radius:15px;overflow:hidden;box-shadow:0 2px 8px rgba(16,24,40,.045)}.changes{min-width:0}.changes-head,.viewer-head{padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;background:#fff}.changes-head b,.viewer-head b{font-size:13px}.count-pill{background:#f2f4f7;color:#475467;border-radius:20px;padding:4px 8px;font-size:11px;font-weight:800}
+.change-tools{padding:10px;border-bottom:1px solid var(--line);background:#fbfcfe}.search{width:100%;height:34px;border:1px solid #dfe3ea;border-radius:8px;padding:0 10px;background:#fff;color:var(--text);outline:none}.filter-row{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap}.filter{border:1px solid #e2e6ec;background:#fff;color:#667085;border-radius:20px;padding:5px 8px;font-size:10px;font-weight:800;cursor:pointer}.filter.active{background:#eeecff;border-color:#d9d5ff;color:var(--accent)}
+.change-list{height:620px;overflow:auto}.change{padding:12px 14px;border-bottom:1px solid var(--line2);cursor:pointer}.change:hover{background:#f8fafc}.change.selected{background:#f6f5ff;box-shadow:inset 3px 0 0 var(--accent)}.badge{font-size:10px;border-radius:20px;padding:4px 7px;font-weight:850;text-transform:uppercase;letter-spacing:.25px}.badge.add{background:var(--green-bg);color:var(--green-t)}.badge.rem{background:var(--red-bg);color:var(--red-t)}.badge.mod{background:var(--amber-bg);color:var(--amber-t)}.badge.same{background:#f2f4f7;color:#667085}.change-text{margin-top:7px;color:#475467;line-height:1.42;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}.change-meta{margin-top:5px;color:#98a2b3;font-size:10px}
+.viewer-head{position:sticky;top:70px;z-index:15}.viewer-tools{display:flex;align-items:center;gap:6px}.viewer-title-wrap{display:flex;align-items:center;gap:9px;min-width:0}.viewer-title-wrap b{white-space:nowrap}.viewer-tools .btn{box-shadow:none}
+.sides{display:grid;grid-template-columns:1fr 1fr;min-height:600px}.side{border-right:1px solid var(--line);min-width:0}.side:last-child{border-right:0}.side-title{padding:10px 13px;background:#f8fafc;color:#475467;font-size:12px;font-weight:750;border-bottom:1px solid var(--line2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.block{padding:11px 14px;border-bottom:1px solid var(--line2);line-height:1.55;white-space:pre-wrap;min-height:42px}.block.add{background:var(--green-bg)}.block.rem{background:var(--red-bg)}.block.mod{background:var(--amber-bg)}.block.same{color:#475467}.word.rem{background:#ffd9df;color:#9e1638;text-decoration:line-through;border-radius:4px;padding:1px 3px}.word.add{background:#b7f0d0;color:#05603a;border-radius:4px;padding:1px 3px}.word.mod{background:#ffe7a8;color:#7a4b00;border-radius:4px;padding:1px 3px}.empty{padding:60px 25px;text-align:center;color:#98a2b3}
+.pdf-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#fff;border-bottom:1px solid var(--line);font-size:11px;color:#667085}.pdf-toolbar .group{display:flex;align-items:center;gap:5px}.pdf-page-info{min-width:68px;text-align:center;font-weight:800;color:#475467}.pdf-preview{height:700px;background:#eef1f5;padding:15px;overflow:auto;position:relative}.pdf-document{display:flex;flex-direction:column;align-items:center;gap:16px;min-width:max-content}.pdf-page{position:relative;background:#fff;box-shadow:0 3px 14px rgba(16,24,40,.12);border:1px solid #d9dee7;overflow:hidden}.pdf-page canvas{display:block}.pdf-textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;z-index:2}.pdf-textLayer span,.pdf-textLayer br{position:absolute;white-space:pre;transform-origin:0 0;color:transparent;cursor:text}.pdf-textLayer span::selection{background:rgba(99,91,255,.25)}.pdf-textLayer .pdf-hit{color:transparent!important;border-radius:2px;padding:1px 1px;margin:-1px -1px;box-shadow:0 0 0 1px rgba(245,158,11,.2);background:rgba(255,193,7,.58)}.pdf-textLayer .pdf-hit.add{background:rgba(18,183,106,.34);box-shadow:0 0 0 1px rgba(18,183,106,.22)}.pdf-textLayer .pdf-hit.rem{background:rgba(240,68,56,.30);box-shadow:0 0 0 1px rgba(240,68,56,.2)}.pdf-textLayer .pdf-hit.mod{background:rgba(247,144,9,.36);box-shadow:0 0 0 1px rgba(247,144,9,.22)}.pdf-loading{min-height:130px;display:grid;place-items:center;color:#667085;font-size:12px}.pdf-fallback{min-height:130px;display:grid;place-items:center;text-align:center;color:#667085;font-size:13px;padding:24px}.pdf-legend{display:flex;gap:10px;align-items:center;padding:8px 11px;background:#fff;border-bottom:1px solid var(--line);font-size:10px;color:#667085}.legend-dot{width:10px;height:10px;border-radius:2px;display:inline-block}.legend-dot.add{background:rgba(18,183,106,.34)}.legend-dot.rem{background:rgba(240,68,56,.30)}.legend-dot.mod{background:rgba(247,144,9,.36)}.pdf-note{padding:9px 12px;background:#fff8e6;color:#7a5b00;border-bottom:1px solid #f0dfae;font-size:11px;line-height:1.4}.pdf-diff-label{padding:10px 13px;background:#fafbfc;border-bottom:1px solid var(--line);font-size:10px;font-weight:850;color:#667085;text-transform:uppercase;letter-spacing:.5px}.pdf-diff{min-height:120px}
+.toast{position:fixed;right:22px;bottom:22px;z-index:200;background:#101828;color:#fff;border-radius:10px;padding:11px 14px;font-size:12px;box-shadow:0 12px 30px rgba(16,24,40,.2);opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.footer-note{margin-top:18px;text-align:center;color:#98a2b3;font-size:11px}
+@keyframes r{to{transform:rotate(360deg)}}
+@media(max-width:1100px){.metrics{grid-template-columns:repeat(3,1fr)}.workspace{grid-template-columns:280px minmax(0,1fr)}}
+@media(max-width:820px){.top{padding:0 17px}.top .sub{display:none}.main{padding:28px 15px 50px}.hero{display:block}.hero h1{font-size:32px}.actions{margin-top:17px}.uploads,.workspace,.sides{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.side{border-right:0;border-bottom:1px solid var(--line)}.side:last-child{border-bottom:0}.viewer-head{top:70px}.change-list{height:360px}.pdf-preview{height:560px}}
+@media(max-width:500px){.compare-shell{padding:12px}.drop{padding:17px}.hero h1{font-size:28px}.metrics{grid-template-columns:1fr 1fr}.result-heading{display:block}.result-actions{margin-top:12px}.top{height:62px}.viewer-head{top:62px}}
+@media print{.top,.compare-shell,.hero,.result-actions,.change-tools,.viewer-tools,.pdf-toolbar,.toast{display:none!important}.main{max-width:none;padding:0}.dashboard{display:block!important}.workspace{display:block}.changes{display:none}.viewer{box-shadow:none;border:0}.sides{grid-template-columns:1fr 1fr}.pdf-preview{height:auto;overflow:visible}.pdf-page{break-inside:avoid}}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
 <div class="app">
-<header class="top"><div class="brand-wrap"><div class="logo">D</div><span class="brand">Diff<span>IQ</span></span><span class="sub">Document comparison engine</span></div><button class="btn" id="newBtn">＋ New comparison</button></header>
+<header class="top">
+  <div class="brand-wrap"><div class="logo">D</div><span class="brand">Diff<span>IQ</span></span><span class="sub">Professional document comparison</span></div>
+  <button class="btn" id="newBtn">＋ New comparison</button>
+</header>
+
 <main class="main">
-<section class="hero"><div><div class="eyebrow"><i></i> Ready to compare</div><h1>See exactly what changed.</h1><p>Compare two versions of a document and review meaningful changes side by side — from complete blocks down to individual words.</p></div><div class="actions"><button class="btn" id="reportBtn" disabled>↓ Export JSON</button><button class="btn primary" id="compareBtn" disabled>Compare documents →</button></div></section>
-<section class="compare-shell"><div class="compare-label">Choose the two versions you want to compare</div><section class="uploads">
-<label class="drop" id="leftDrop"><input id="leftInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv"><div class="drop-top"><div><h3>Original version</h3><p>The earlier document or baseline version</p></div><div class="upload-icon">↑</div></div><div class="file" id="leftFile"><span class="file-empty">Drop a file here or click to browse</span><span class="file-ext">FILE</span></div></label>
-<label class="drop" id="rightDrop"><input id="rightInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv"><div class="drop-top"><div><h3>Revised version</h3><p>The newer document you want to check</p></div><div class="upload-icon">↑</div></div><div class="file" id="rightFile"><span class="file-empty">Drop a file here or click to browse</span><span class="file-ext">FILE</span></div></label>
-</section></section>
-<div class="status" id="status"></div>
-<div class="notice">Supported: PDF, Word, Excel, PowerPoint, TXT, Markdown and CSV. For structural comparison, use the same format on both sides.</div>
+<section class="hero">
+  <div>
+    <div class="eyebrow"><i></i> Secure browser-based review</div>
+    <h1>See exactly what changed.</h1>
+    <p>Compare two versions of a document, inspect every detected change, and review PDF differences directly on the original pages.</p>
+  </div>
+  <div class="actions">
+    <button class="btn" id="reportBtn" disabled>↓ Export JSON</button>
+    <button class="btn" id="printBtn" disabled>⎙ Print report</button>
+    <button class="btn primary" id="compareBtn" disabled>Compare documents →</button>
+  </div>
+</section>
+
+<section class="compare-shell">
+  <div class="compare-label">Choose the two versions you want to compare</div>
+  <section class="uploads">
+    <label class="drop" id="leftDrop">
+      <input id="leftInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv">
+      <div class="drop-top"><div><h3>Original version</h3><p>The earlier document or baseline version</p></div><div class="upload-icon">↑</div></div>
+      <div class="file" id="leftFile"><span class="file-empty">Drop a file here or click to browse</span><span class="file-ext">FILE</span></div>
+    </label>
+    <label class="drop" id="rightDrop">
+      <input id="rightInput" type="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.txt,.md,.csv">
+      <div class="drop-top"><div><h3>Revised version</h3><p>The newer document you want to check</p></div><div class="upload-icon">↑</div></div>
+      <div class="file" id="rightFile"><span class="file-empty">Drop a file here or click to browse</span><span class="file-ext">FILE</span></div>
+    </label>
+  </section>
+  <div class="status-row"><div class="status" id="status"></div><div id="formatWarning"></div></div>
+  <div class="notice">Supported: PDF, Word, Excel, PowerPoint, TXT, Markdown and CSV. For structural comparison, use the same format on both sides.</div>
+</section>
+
 <div class="dashboard" id="dashboard">
-<div class="result-heading"><div><h2>Comparison results</h2><p>Review every detected change below.</p></div></div><div class="metrics"><div class="metric sim"><b id="mSimilarity">—</b><span>Similarity</span></div><div class="metric mod"><b id="mModified">0</b><span>Modified</span></div><div class="metric add"><b id="mAdded">0</b><span>Added</span></div><div class="metric rem"><b id="mRemoved">0</b><span>Removed</span></div><div class="metric"><b id="mSame">0</b><span>Unchanged</span></div></div>
-<div class="workspace"><aside class="changes"><div class="changes-head"><b>Detected changes</b><span class="count-pill" id="changeCount">0</span></div><div class="change-list" id="changeList"></div></aside><section class="viewer"><div class="viewer-head"><b>Side-by-side comparison</b><span class="count-pill" id="formatInfo"></span></div><div class="sides"><div class="side"><div class="side-title" id="leftTitle">Original</div><div id="leftView"></div></div><div class="side"><div class="side-title" id="rightTitle">Revised</div><div id="rightView"></div></div></div></section></div>
+  <div class="result-heading">
+    <div><h2>Comparison results</h2><p id="resultSubtitle">Review every detected change below.</p></div>
+    <div class="result-actions">
+      <button class="btn small" id="prevBtn" disabled>← Previous</button>
+      <button class="btn small" id="nextBtn" disabled>Next →</button>
+    </div>
+  </div>
+
+  <div class="metrics">
+    <div class="metric sim"><b id="mSimilarity">—</b><span>Similarity</span></div>
+    <div class="metric mod"><b id="mModified">0</b><span>Modified</span></div>
+    <div class="metric add"><b id="mAdded">0</b><span>Added</span></div>
+    <div class="metric rem"><b id="mRemoved">0</b><span>Removed</span></div>
+    <div class="metric"><b id="mSame">0</b><span>Unchanged</span></div>
+  </div>
+
+  <div class="workspace">
+    <aside class="changes">
+      <div class="changes-head"><b>Detected changes</b><span class="count-pill" id="changeCount">0</span></div>
+      <div class="change-tools">
+        <input class="search" id="changeSearch" type="search" placeholder="Search changes…">
+        <div class="filter-row">
+          <button class="filter active" data-filter="all">All</button>
+          <button class="filter" data-filter="modified">Modified</button>
+          <button class="filter" data-filter="added">Added</button>
+          <button class="filter" data-filter="removed">Removed</button>
+          <button class="filter" data-filter="same">Same</button>
+        </div>
+      </div>
+      <div class="change-list" id="changeList"></div>
+    </aside>
+
+    <section class="viewer">
+      <div class="viewer-head">
+        <div class="viewer-title-wrap"><b>Side-by-side comparison</b><span class="count-pill" id="formatInfo"></span></div>
+        <div class="viewer-tools">
+          <button class="btn small" id="syncBtn">⇆ Sync scroll: On</button>
+          <button class="btn small" id="collapseBtn">Hide unchanged</button>
+        </div>
+      </div>
+      <div class="sides">
+        <div class="side"><div class="side-title" id="leftTitle">Original</div><div id="leftView"></div></div>
+        <div class="side"><div class="side-title" id="rightTitle">Revised</div><div id="rightView"></div></div>
+      </div>
+    </section>
+  </div>
+  <div class="footer-note">DiffIQ compares the uploaded files through the configured comparison API. Files are not stored by this page after the comparison request.</div>
 </div>
-</main></div>
+</main>
+</div>
+<div class="toast" id="toast"></div>
+
 <script>
 (function(){
+'use strict';
+
 var API=window.DIFFIQ_API||'https://doc-neww.onrender.com';
-var leftFile=null,rightFile=null,lastResult=null;var leftPdfUrl=null,rightPdfUrl=null;
+var allowed=['pdf','docx','xlsx','xlsm','pptx','txt','md','csv'];
+var leftFile=null,rightFile=null,lastResult=null,leftPdfUrl=null,rightPdfUrl=null;
+var pdfJobs={left:0,right:0};
+var currentIndex=-1,activeFilter='all',hideSame=false,syncScroll=true,syncLock=false;
+var pdfState={left:{pages:[],hits:{}},right:{pages:[],hits:{}}};
 var $=function(id){return document.getElementById(id)};
-function setStatus(msg,loading){$('status').innerHTML=loading?'<span class="spinner"></span>'+msg:msg;}
-function bindDrop(drop,input,side){
- drop.addEventListener('dragover',function(e){e.preventDefault();drop.classList.add('drag')});
- drop.addEventListener('dragleave',function(){drop.classList.remove('drag')});
- drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('drag');if(e.dataTransfer.files[0]) choose(e.dataTransfer.files[0],side)});
- input.addEventListener('change',function(){if(input.files[0]) choose(input.files[0],side)});
-}
-function revokePdfUrl(side){var key=side==='left'?'leftPdfUrl':'rightPdfUrl';if(window[key]){URL.revokeObjectURL(window[key]);window[key]=null}}
-function choose(file,side){
- var allowed=['pdf','docx','xlsx','xlsm','pptx','txt','md','csv'];var e=file.name.toLowerCase().split('.').pop();
- if(allowed.indexOf(e)<0){setStatus('Unsupported file type: '+e);return}
- revokePdfUrl(side);if(e==='pdf'){if(side==='left')leftPdfUrl=URL.createObjectURL(file);else rightPdfUrl=URL.createObjectURL(file)}
- if(side==='left'){leftFile=file;$('leftFile').innerHTML='<span class="file-name">'+esc(file.name)+'</span><span class="file-ext">'+e+'</span>'}else{rightFile=file;$('rightFile').innerHTML='<span class="file-name">'+esc(file.name)+'</span><span class="file-ext">'+e+'</span>'}
- $('compareBtn').disabled=!(leftFile&&rightFile);
- if(leftFile&&rightFile){var a=leftFile.name.split('.').pop().toLowerCase(),b=rightFile.name.split('.').pop().toLowerCase();if(a!==b)setStatus('Use the same file format for structural comparison.')} }
+
+if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}
+
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-function renderTokens(tokens){return tokens.map(function(t){if(t.type==='same')return esc(t.right||t.left);if(t.type==='added')return '<span class="word add">'+esc(t.right)+'</span> ';if(t.type==='removed')return '<span class="word rem">'+esc(t.left)+'</span> ';return '<span class="word mod">'+esc(t.left)+' → '+esc(t.right)+'</span> '}).join('')}
-function blockText(change,side){var b=side==='left'?change.left:change.right;if(!b)return '<div class="empty">—</div>';if(change.type==='modified'&&change.tokens)return '<div class="block mod">'+renderTokens(change.tokens)+'</div>';return '<div class="block '+change.type+'">'+esc(b.text)+'</div>'}
-function renderResult(r){
- lastResult=r;$('dashboard').style.display='block';$('mSimilarity').textContent=r.similarity+'%';$('mModified').textContent=r.summary.modified;$('mAdded').textContent=r.summary.added;$('mRemoved').textContent=r.summary.removed;$('mSame').textContent=r.summary.same;$('changeCount').textContent=r.changes.length;$('formatInfo').textContent=(r.left.format||'').toUpperCase();$('leftTitle').textContent=r.files.left;$('rightTitle').textContent=r.files.right;
- var cl=$('changeList'),lv=$('leftView'),rv=$('rightView');cl.innerHTML='';lv.innerHTML='';rv.innerHTML='';
- var isPdf=(String(r.left.format||'').toLowerCase()==='pdf');
- if(isPdf){
-   lv.innerHTML='<div class="pdf-preview"><iframe class="pdf-frame" title="'+esc(r.files.left)+'" src="'+leftPdfUrl+'#page=1&zoom=page-width"></iframe></div><div class="pdf-note">Original PDF preview. The extracted difference blocks are shown below so you can jump to the detected changes.</div><div class="pdf-diff-label">Detected text differences</div><div class="pdf-diff" id="leftPdfDiff"></div>';
-   rv.innerHTML='<div class="pdf-preview"><iframe class="pdf-frame" title="'+esc(r.files.right)+'" src="'+rightPdfUrl+'#page=1&zoom=page-width"></iframe></div><div class="pdf-note">Revised PDF preview. The extracted difference blocks are shown below so you can review exactly what changed.</div><div class="pdf-diff-label">Detected text differences</div><div class="pdf-diff" id="rightPdfDiff"></div>';
- }
- var leftContainer=isPdf?$('leftPdfDiff'):lv;var rightContainer=isPdf?$('rightPdfDiff'):rv;
- r.changes.forEach(function(c,i){var d=document.createElement('div');d.className='change';var label=c.type==='removed'?'Removed':c.type==='added'?'Added':c.type==='modified'?'Modified':'Same';var cls=c.type==='removed'?'rem':c.type==='added'?'add':c.type==='modified'?'mod':'same';var b=c.left||c.right;d.innerHTML='<span class="badge '+cls+'">'+label+'</span><div class="change-text">'+esc(b?b.text:'')+'</div>';d.onclick=function(){var x=document.getElementById('chg-'+i);if(x)x.scrollIntoView({behavior:'smooth',block:'center'})};cl.appendChild(d);
-   var ld=document.createElement('div');ld.id='chg-'+i;ld.innerHTML=blockText(c,'left');leftContainer.appendChild(ld);var rd=document.createElement('div');rd.innerHTML=blockText(c,'right');rightContainer.appendChild(rd);
- });
- if(!r.changes.length){leftContainer.innerHTML='<div class="empty">No content differences found.</div>';rightContainer.innerHTML='<div class="empty">No content differences found.</div>'}
+function ext(name){return String(name||'').toLowerCase().split('.').pop()}
+function setStatus(msg,loading,error){$('status').className='status'+(error?' error':'');$('status').innerHTML=loading?'<span class="spinner"></span>'+esc(msg):esc(msg)}
+function toast(msg){var t=$('toast');t.textContent=msg;t.classList.add('show');clearTimeout(window.__toast);window.__toast=setTimeout(function(){t.classList.remove('show')},2300)}
+function revokePdfUrl(side){var key=side==='left'?'leftPdfUrl':'rightPdfUrl';if(window[key]){URL.revokeObjectURL(window[key]);window[key]=null}}
+function resetFile(side){
+  revokePdfUrl(side);
+  if(side==='left'){leftFile=null;$('leftInput').value='';$('leftFile').innerHTML='<span class="file-empty">Drop a file here or click to browse</span><span class="file-ext">FILE</span>'}
+  else{rightFile=null;$('rightInput').value='';$('rightFile').innerHTML='<span class="file-empty">Drop a file here or click to browse</span><span class="file-ext">FILE</span>'}
+  $('compareBtn').disabled=!(leftFile&&rightFile);
 }
+function choose(file,side){
+  var e=ext(file.name);
+  if(allowed.indexOf(e)<0){setStatus('Unsupported file type: '+e,false,true);return}
+  revokePdfUrl(side);
+  if(e==='pdf'){if(side==='left')leftPdfUrl=URL.createObjectURL(file);else rightPdfUrl=URL.createObjectURL(file)}
+  var html='<span class="file-name" title="'+esc(file.name)+'">'+esc(file.name)+'</span><span class="file-ext">'+e+'</span>';
+  if(side==='left'){leftFile=file;$('leftFile').innerHTML=html}else{rightFile=file;$('rightFile').innerHTML=html}
+  $('compareBtn').disabled=!(leftFile&&rightFile);
+  if(leftFile&&rightFile){
+    var a=ext(leftFile.name),b=ext(rightFile.name);
+    if(a!==b){$('formatWarning').innerHTML='<span class="badge rem">Same format required</span>';setStatus('Both files must use the same format for structural comparison.')}else{$('formatWarning').innerHTML='<span class="badge same">'+a.toUpperCase()+' ready</span>';setStatus('Both files are ready to compare.')}
+  }
+}
+function bindDrop(drop,input,side){
+  drop.addEventListener('dragover',function(e){e.preventDefault();drop.classList.add('drag')});
+  drop.addEventListener('dragleave',function(){drop.classList.remove('drag')});
+  drop.addEventListener('drop',function(e){e.preventDefault();drop.classList.remove('drag');if(e.dataTransfer.files[0])choose(e.dataTransfer.files[0],side)});
+  input.addEventListener('change',function(){if(input.files[0])choose(input.files[0],side)});
+}
+function normalizeText(s){return String(s||'').toLowerCase().replace(/\u00a0/g,' ').replace(/[“”‘’]/g,"'").replace(/\s+/g,' ').trim()}
+function tokenWords(s){return normalizeText(s).split(/[^a-z0-9.%$₹€£-]+/i).filter(function(x){return x.length>=2})}
+function changeTerms(change,side){
+  var vals=[],type=change.type;
+  if(type==='modified'&&Array.isArray(change.tokens)){
+    change.tokens.forEach(function(t){
+      if(t.type==='modified')vals.push(side==='left'?t.left:t.right);
+      else if(t.type==='removed'&&side==='left')vals.push(t.left);
+      else if(t.type==='added'&&side==='right')vals.push(t.right);
+    });
+  }else if(type==='removed'&&side==='left')vals.push(change.left&&change.left.text);
+  else if(type==='added'&&side==='right')vals.push(change.right&&change.right.text);
+  return vals.map(normalizeText).filter(function(v){return v&&v.length>=2});
+}
+function allTerms(changes,side){
+  var out=[];
+  (changes||[]).forEach(function(c){changeTerms(c,side).forEach(function(v){out.push(v)})});
+  out.sort(function(a,b){return b.length-a.length});
+  return Array.from(new Set(out));
+}
+function textItemsToSpans(textContent,viewport){
+  var items=textContent.items||[];
+  return items;
+}
+function classifyChange(change,side){
+  if(change.type==='added')return side==='right'?'add':'same';
+  if(change.type==='removed')return side==='left'?'rem':'same';
+  if(change.type==='modified')return 'mod';
+  return 'same';
+}
+function highlightPage(layer,items,changes,side,pageNo){
+  var spans=Array.from(layer.querySelectorAll('span'));
+  var state=pdfState[side];
+  spans.forEach(function(span){span.classList.remove('pdf-hit','add','rem','mod');delete span.dataset.change});
+  var normalizedSpans=spans.map(function(s){return normalizeText(s.textContent||'')});
+  changes.forEach(function(change,ci){
+    var terms=changeTerms(change,side);
+    if(!terms.length)return;
+    var cls=classifyChange(change,side);
+    var hit=false;
+    normalizedSpans.forEach(function(txt,si){
+      if(!txt)return;
+      var matched=terms.some(function(term){
+        if(txt.indexOf(term)>=0)return true;
+        var words=tokenWords(term);
+        if(!words.length)return false;
+        var spanWords=tokenWords(txt);
+        return words.some(function(w){return spanWords.indexOf(w)>=0});
+      });
+      if(matched){
+        var sp=spans[si];sp.classList.add('pdf-hit');if(cls!=='same')sp.classList.add(cls);sp.dataset.change=String(ci);hit=true;
+      }
+    });
+    if(hit){
+      if(!state.hits[ci])state.hits[ci]=[];
+      state.hits[ci].push(pageNo);
+    }
+  });
+}
+async function renderPdf(url,container,side,changes){
+  if(!window.pdfjsLib){container.innerHTML='<div class="pdf-fallback">PDF preview could not load because the PDF rendering library is unavailable.</div>';return}
+  var job=++pdfJobs[side];pdfState[side]={pages:[],hits:{}};
+  container.innerHTML='<div class="pdf-loading"><span class="spinner"></span>Rendering PDF and locating changes…</div>';
+  try{
+    var pdf=await pdfjsLib.getDocument({url:url}).promise;
+    if(job!==pdfJobs[side])return;
+    container.innerHTML='';
+    for(var n=1;n<=pdf.numPages;n++){
+      if(job!==pdfJobs[side])return;
+      var page=await pdf.getPage(n),viewport=page.getViewport({scale:1.35});
+      var wrap=document.createElement('div');wrap.className='pdf-page';wrap.dataset.page=n;wrap.style.width=viewport.width+'px';wrap.style.height=viewport.height+'px';
+      var canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';wrap.appendChild(canvas);
+      var layer=document.createElement('div');layer.className='pdf-textLayer';layer.style.width=viewport.width+'px';layer.style.height=viewport.height+'px';wrap.appendChild(layer);
+      container.appendChild(wrap);pdfState[side].pages.push(wrap);
+      await page.render({canvasContext:canvas.getContext('2d'),viewport:viewport}).promise;
+      var tc=await page.getTextContent();var textDivs=[];
+      await pdfjsLib.renderTextLayer({textContent:tc,container:layer,viewport:viewport,textDivs:textDivs}).promise;
+      highlightPage(layer,tc.items,changes,side,n);
+    }
+    updatePageIndicator(side,container);
+  }catch(err){
+    if(job!==pdfJobs[side])return;
+    container.innerHTML='<div class="pdf-fallback">Could not render this PDF preview.<br><small>'+esc(err.message||err)+'</small></div>';
+  }
+}
+function makePdfView(side,title,fileName){
+  var id=side==='left'?'leftPdf':'rightPdf';
+  return '<div class="pdf-legend"><span class="legend-dot rem"></span> Removed <span class="legend-dot add"></span> Added <span class="legend-dot mod"></span> Modified</div>'+
+    '<div class="pdf-toolbar"><div class="group"><button class="btn icon small" data-pdf-zoom="'+side+'" data-dir="-1" title="Zoom out">−</button><span class="pdf-page-info" id="'+side+'Zoom">135%</span><button class="btn icon small" data-pdf-zoom="'+side+'" data-dir="1" title="Zoom in">+</button></div>'+
+    '<div class="group"><button class="btn small" data-pdf-page="'+side+'" data-dir="-1">↑ Prev page</button><span class="pdf-page-info" id="'+side+'Page">Page 1</span><button class="btn small" data-pdf-page="'+side+'" data-dir="1">Next page ↓</button></div></div>'+
+    '<div class="pdf-preview" id="'+id+'Preview"><div class="pdf-document"></div></div>'+
+    '<div class="pdf-note">'+(side==='left'?'Original':'Revised')+' PDF. Highlights are placed on matching PDF text-layer content. Click a detected change to jump to its matching page.</div>'+
+    '<div class="pdf-diff-label">Detected text differences</div><div class="pdf-diff" id="'+side+'PdfDiff"></div>';
+}
+function renderTokens(tokens){return (tokens||[]).map(function(t){if(t.type==='same')return esc(t.right||t.left||'');if(t.type==='added')return '<span class="word add">'+esc(t.right||'')+'</span> ';if(t.type==='removed')return '<span class="word rem">'+esc(t.left||'')+'</span> ';return '<span class="word mod">'+esc(t.left||'')+' → '+esc(t.right||'')+'</span> '}).join('')}
+function blockText(change,side){
+  var b=side==='left'?change.left:change.right;
+  if(!b)return '<div class="empty">—</div>';
+  if(change.type==='modified'&&change.tokens)return '<div class="block mod">'+renderTokens(change.tokens)+'</div>';
+  return '<div class="block '+change.type+'">'+esc(b.text||'')+'</div>';
+}
+function changeLabel(type){return type==='removed'?'Removed':type==='added'?'Added':type==='modified'?'Modified':'Same'}
+function changeCls(type){return type==='removed'?'rem':type==='added'?'add':type==='modified'?'mod':'same'}
+function changeText(c){var b=c.type==='added'?c.right:c.left;return b&&b.text?b.text:(c.right&&c.right.text)||(c.left&&c.left.text)||'Detected change'}
+function visibleChanges(){
+  if(!lastResult)return [];
+  var q=normalizeText($('changeSearch').value||'');
+  return lastResult.changes.map(function(c,i){return {c:c,i:i}}).filter(function(x){
+    var type=x.c.type||'same',text=normalizeText(changeText(x.c));
+    return (activeFilter==='all'||type===activeFilter)&&(!q||text.indexOf(q)>=0);
+  });
+}
+function renderChangeList(){
+  var list=$('changeList');list.innerHTML='';
+  var items=visibleChanges();
+  if(!items.length){list.innerHTML='<div class="empty">No changes match this filter.</div>';return}
+  items.forEach(function(x){
+    var c=x.c,i=x.i,d=document.createElement('div');d.className='change'+(i===currentIndex?' selected':'');d.dataset.index=i;
+    d.innerHTML='<span class="badge '+changeCls(c.type)+'">'+changeLabel(c.type)+'</span><div class="change-text">'+esc(changeText(c))+'</div><div class="change-meta">Change '+(i+1)+' of '+lastResult.changes.length+'</div>';
+    d.addEventListener('click',function(){focusChange(i,true)});list.appendChild(d);
+  });
+}
+function updateNav(){var total=lastResult?lastResult.changes.length:0;$('prevBtn').disabled=total===0;$('nextBtn').disabled=total===0}
+function focusChange(index,notify){
+  if(!lastResult||index<0||index>=lastResult.changes.length)return;
+  currentIndex=index;renderChangeList();
+  var item=document.querySelector('.change[data-index="'+index+'"]');if(item)item.scrollIntoView({behavior:'smooth',block:'nearest'});
+  var type=lastResult.changes[index].type;
+  var sides=['left','right'];
+  sides.forEach(function(side){
+    var st=pdfState[side],pages=st.hits[index]||[];
+    if(pages.length){
+      var page=st.pages[pages[0]-1];if(page&&page.parentElement){page.scrollIntoView({behavior:'smooth',block:'center'})}
+    }else{
+      var el=document.getElementById('chg-'+side+'-'+index);if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+    }
+  });
+  var blocks=document.querySelectorAll('[data-change-block="'+index+'"]');blocks.forEach(function(b){b.style.outline='2px solid rgba(99,91,255,.35)';setTimeout(function(){b.style.outline=''},850)});
+  if(notify)toast(changeLabel(type)+' change '+(index+1)+' selected');
+}
+function renderResult(r){
+  lastResult=r;currentIndex=r.changes.length?0:-1;activeFilter='all';hideSame=false;$('dashboard').style.display='block';
+  $('mSimilarity').textContent=(r.similarity==null?'—':r.similarity+'%');$('mModified').textContent=r.summary&&r.summary.modified||0;$('mAdded').textContent=r.summary&&r.summary.added||0;$('mRemoved').textContent=r.summary&&r.summary.removed||0;$('mSame').textContent=r.summary&&r.summary.same||0;
+  $('changeCount').textContent=r.changes.length;$('formatInfo').textContent=(r.left&&r.left.format||'').toUpperCase();$('leftTitle').textContent=r.files&&r.files.left||leftFile.name;$('rightTitle').textContent=r.files&&r.files.right||rightFile.name;
+  $('resultSubtitle').textContent=r.changes.length+' detected change blocks · '+(r.similarity==null?'':r.similarity+'% similarity');
+  $('reportBtn').disabled=false;$('printBtn').disabled=false;updateNav();
+  $('changeSearch').value='';document.querySelectorAll('.filter').forEach(function(b){b.classList.toggle('active',b.dataset.filter==='all')});
+  var cl=$('changeList'),lv=$('leftView'),rv=$('rightView');cl.innerHTML='';lv.innerHTML='';rv.innerHTML='';pdfState={left:{pages:[],hits:{}},right:{pages:[],hits:{}}};
+  var isPdf=String(r.left&&r.left.format||'').toLowerCase()==='pdf';
+  if(isPdf){
+    lv.innerHTML=makePdfView('left','Original',r.files.left);rv.innerHTML=makePdfView('right','Revised',r.files.right);
+    renderPdf(leftPdfUrl,lv.querySelector('.pdf-document'),'left',r.changes);renderPdf(rightPdfUrl,rv.querySelector('.pdf-document'),'right',r.changes);
+  }
+  var leftContainer=isPdf?$('leftPdfDiff'):lv,rightContainer=isPdf?$('rightPdfDiff'):rv;
+  r.changes.forEach(function(c,i){
+    var d=document.createElement('div');d.className='change';d.dataset.index=i;d.innerHTML='<span class="badge '+changeCls(c.type)+'">'+changeLabel(c.type)+'</span><div class="change-text">'+esc(changeText(c))+'</div><div class="change-meta">Change '+(i+1)+' of '+r.changes.length+'</div>';
+    d.addEventListener('click',function(){focusChange(i,true)});cl.appendChild(d);
+    var ld=document.createElement('div');ld.id='chg-left-'+i;ld.dataset.changeBlock=i;ld.innerHTML=blockText(c,'left');if(hideSame&&c.type==='same')ld.style.display='none';leftContainer.appendChild(ld);
+    var rd=document.createElement('div');rd.id='chg-right-'+i;rd.dataset.changeBlock=i;rd.innerHTML=blockText(c,'right');if(hideSame&&c.type==='same')rd.style.display='none';rightContainer.appendChild(rd);
+  });
+  if(!r.changes.length){leftContainer.innerHTML='<div class="empty">No content differences found.</div>';rightContainer.innerHTML='<div class="empty">No content differences found.</div>'}
+  renderChangeList();if(r.changes.length)focusChange(0,false);
+  setTimeout(function(){document.querySelector('.dashboard').scrollIntoView({behavior:'smooth',block:'start'})},60);
+}
+function updatePageIndicator(side,container){
+  var pages=pdfState[side].pages;if(!pages.length)return;
+  var box=container.closest('.pdf-preview');if(!box)return;
+  var best=1,min=Infinity;
+  pages.forEach(function(p,i){var rect=p.getBoundingClientRect(),b=box.getBoundingClientRect(),dist=Math.abs(rect.top-b.top-20);if(dist<min){min=dist;best=i+1}});
+  $(side+'Page').textContent='Page '+best+' / '+pages.length;
+}
+function bindPdfControls(){
+  document.addEventListener('click',function(e){
+    var z=e.target.closest('[data-pdf-zoom]');if(z){var side=z.dataset.pdfZoom,dir=Number(z.dataset.dir),state=window.__pdfScale||{left:1.35,right:1.35};state[side]=Math.max(.8,Math.min(2.1,state[side]+dir*.15));window.__pdfScale=state;$(side+'Zoom').textContent=Math.round(state[side]/1.35*135)+'%';if(lastResult&&String(lastResult.left.format).toLowerCase()==='pdf'){rerenderPdfSide(side,state[side])}return}
+    var p=e.target.closest('[data-pdf-page]');if(p){var side2=p.dataset.pdfPage,dir2=Number(p.dataset.dir),pages=pdfState[side2].pages;if(!pages.length)return;var current=Number(($(side2+'Page').textContent.match(/Page (\\d+)/)||[0,1])[1]),target=Math.max(1,Math.min(pages.length,current+dir2));pages[target-1].scrollIntoView({behavior:'smooth',block:'start'});return}
+  });
+  ['left','right'].forEach(function(side){
+    document.addEventListener('scroll',function(){},true);
+  });
+}
+async function rerenderPdfSide(side,scale){
+  if(!lastResult)return;
+  var container=$(side+'Pdf')?$(side+'Pdf').querySelector('.pdf-document'):document.querySelector('#'+side+'PdfPreview .pdf-document');
+  var url=side==='left'?leftPdfUrl:rightPdfUrl;if(!url||!container)return;
+  await renderPdfScaled(url,container,side,lastResult.changes,scale);
+}
+async function renderPdfScaled(url,container,side,changes,scale){
+  if(!window.pdfjsLib)return;var job=++pdfJobs[side];pdfState[side]={pages:[],hits:{}};
+  container.innerHTML='<div class="pdf-loading"><span class="spinner"></span>Updating PDF view…</div>';
+  try{
+    var pdf=await pdfjsLib.getDocument({url:url}).promise;if(job!==pdfJobs[side])return;container.innerHTML='';
+    for(var n=1;n<=pdf.numPages;n++){
+      var page=await pdf.getPage(n),viewport=page.getViewport({scale:scale}),wrap=document.createElement('div');wrap.className='pdf-page';wrap.dataset.page=n;wrap.style.width=viewport.width+'px';wrap.style.height=viewport.height+'px';
+      var canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';wrap.appendChild(canvas);
+      var layer=document.createElement('div');layer.className='pdf-textLayer';layer.style.width=viewport.width+'px';layer.style.height=viewport.height+'px';wrap.appendChild(layer);container.appendChild(wrap);pdfState[side].pages.push(wrap);
+      await page.render({canvasContext:canvas.getContext('2d'),viewport:viewport}).promise;var tc=await page.getTextContent(),textDivs=[];await pdfjsLib.renderTextLayer({textContent:tc,container:layer,viewport:viewport,textDivs:textDivs}).promise;highlightPage(layer,tc.items,changes,side,n);
+    }
+  }catch(e){if(job===pdfJobs[side])container.innerHTML='<div class="pdf-fallback">Could not update this PDF view.</div>'}
+}
+function setupSync(){
+  var a=$('leftView'),b=$('rightView');
+  function bind(source,target){
+    source.addEventListener('scroll',function(){
+      if(!syncScroll||syncLock)return;syncLock=true;
+      var maxS=source.scrollHeight-source.clientHeight,maxT=target.scrollHeight-target.clientHeight;
+      if(maxS>0)target.scrollTop=(source.scrollTop/maxS)*Math.max(0,maxT);
+      if(source.scrollWidth>source.clientWidth&&target.scrollWidth>target.clientWidth){var mx=source.scrollWidth-source.clientWidth,mt=target.scrollWidth-target.clientWidth;target.scrollLeft=(source.scrollLeft/mx)*Math.max(0,mt)}
+      setTimeout(function(){syncLock=false},30);
+    });
+  }
+  bind(a,b);bind(b,a);
+}
+function exportJson(){
+  if(!lastResult)return;var blob=new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='diffiq-report.json';document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000);toast('JSON report exported')}
+function printReport(){if(lastResult){window.print()}}
 $('compareBtn').addEventListener('click',async function(){
- if(!leftFile||!rightFile)return;var le=leftFile.name.toLowerCase().split('.').pop(),re=rightFile.name.toLowerCase().split('.').pop();if(le!==re){setStatus('Both files must have the same format.');return}
- var fd=new FormData();fd.append('left',leftFile);fd.append('right',rightFile);$('compareBtn').disabled=true;setStatus('Uploading and comparing documents…',true);
- try{var res=await fetch(API+'/compare',{method:'POST',body:fd});var data=await res.json();if(!res.ok)throw new Error(data.detail||'Server returned '+res.status);renderResult(data);setStatus('Comparison complete. '+data.changes.length+' blocks analysed.')}catch(e){setStatus('Comparison failed: '+e.message);$('dashboard').style.display='none'}finally{$('compareBtn').disabled=false}
+  if(!leftFile||!rightFile)return;
+  var le=ext(leftFile.name),re=ext(rightFile.name);if(le!==re){setStatus('Both files must have the same format.',false,true);return}
+  var fd=new FormData();fd.append('left',leftFile);fd.append('right',rightFile);$('compareBtn').disabled=true;setStatus('Uploading and comparing documents…',true);
+  try{
+    var res=await fetch(API+'/compare',{method:'POST',body:fd}),data;
+    try{data=await res.json()}catch(_){throw new Error('The comparison service returned an invalid response.')}
+    if(!res.ok)throw new Error(data.detail||'Server returned '+res.status);
+    if(!data.summary||!Array.isArray(data.changes))throw new Error('The comparison response is missing expected result fields.');
+    renderResult(data);setStatus('Comparison complete. '+data.changes.length+' change blocks analysed.');toast('Comparison complete');
+  }catch(e){setStatus('Comparison failed: '+e.message,false,true);$('dashboard').style.display='none'}finally{$('compareBtn').disabled=false}
 });
-$('reportBtn').addEventListener('click',function(){if(!lastResult)return;var blob=new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='diffiq-report.json';a.click();URL.revokeObjectURL(a.href)});
+$('reportBtn').addEventListener('click',exportJson);$('printBtn').addEventListener('click',printReport);
 $('newBtn').addEventListener('click',function(){location.reload()});
-bindDrop($('leftDrop'),$('leftInput'),'left');bindDrop($('rightDrop'),$('rightInput'),'right');window.addEventListener('beforeunload',function(){revokePdfUrl('left');revokePdfUrl('right')});
+$('prevBtn').addEventListener('click',function(){if(lastResult&&lastResult.changes.length)focusChange((currentIndex-1+lastResult.changes.length)%lastResult.changes.length,true)});
+$('nextBtn').addEventListener('click',function(){if(lastResult&&lastResult.changes.length)focusChange((currentIndex+1)%lastResult.changes.length,true)});
+$('changeSearch').addEventListener('input',renderChangeList);
+document.querySelectorAll('.filter').forEach(function(b){b.addEventListener('click',function(){activeFilter=b.dataset.filter;document.querySelectorAll('.filter').forEach(function(x){x.classList.remove('active')});b.classList.add('active');renderChangeList()})});
+$('syncBtn').addEventListener('click',function(){syncScroll=!syncScroll;$('syncBtn').textContent='⇆ Sync scroll: '+(syncScroll?'On':'Off')});
+$('collapseBtn').addEventListener('click',function(){
+  hideSame=!hideSame;$('collapseBtn').textContent=hideSame?'Show unchanged':'Hide unchanged';
+  if(lastResult)lastResult.changes.forEach(function(c,i){['left','right'].forEach(function(s){var el=$('chg-'+s+'-'+i);if(el)el.style.display=hideSame&&c.type==='same'?'none':''})});
+});
+bindDrop($('leftDrop'),$('leftInput'),'left');bindDrop($('rightDrop'),$('rightInput'),'right');bindPdfControls();setupSync();
+window.addEventListener('beforeunload',function(){revokePdfUrl('left');revokePdfUrl('right')});
 })();
 </script>
-</body></html>
+</body>
+</html>
