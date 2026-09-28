@@ -496,9 +496,14 @@ async function extract(file){
 
         const form=new FormData();
         form.append('file', file);
-        const resp=await fetch(`${PDF_API}/extract`,{method:'POST',body:form});
+        const controller=new AbortController();
+        const timeout=setTimeout(()=>controller.abort(),180000);
+        let resp;
+        try{
+          resp=await fetch(`${PDF_API}/extract`,{method:'POST',body:form,mode:'cors',signal:controller.signal});
+        }finally{clearTimeout(timeout);}
 
-        if(!resp.ok) throw new Error(`Server ${resp.status}: ${await resp.text()}`);
+        if(!resp.ok) throw new Error(`Render API ${resp.status}: ${await resp.text()}`);
         const result=await resp.json();
 
         if(pageBar) pageBar.style.width='100%';
@@ -552,7 +557,7 @@ async function extract(file){
       }catch(backendErr){
         console.warn('Backend extraction failed, falling back to pdfjs:',backendErr);
         const detail=$('prog-detail');
-        if(detail) detail.textContent=`Backend unavailable — using pdfjs fallback`;
+        if(detail) detail.textContent=`Render extraction unavailable — using browser PDF extraction`; 
         // Fall through to pdfjs path below
       }
     }
@@ -1576,7 +1581,7 @@ function setActive(id){
   ['old','new'].forEach(side=>{
     const pane=$('pane-'+side);
     pane.querySelectorAll('[data-id]').forEach(el=>el.classList.remove('focus-ring'));
-    const el=pane.querySelector(`[data-id="${id}"]`);
+    const el=[...pane.querySelectorAll('[data-id]')].find(node=>String(node.dataset.id)===String(id));
     if(el){el.classList.add('focus-ring');el.scrollIntoView({behavior:'smooth',block:'center'});}
   });
   renderDetail(ch);
