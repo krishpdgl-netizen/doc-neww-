@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: diffiq-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: CORS_ORIGINS
+        value: "*"
