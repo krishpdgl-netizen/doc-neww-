@@ -20,7 +20,7 @@ SUPPORTED = {"pdf", "docx", "xlsx", "xlsm", "pptx", "txt", "md", "csv"}
 OCR_DPI = 240
 OCR_MIN_CONF = 30
 
-app = FastAPI(title="DiffIQ Document Comparison API", version="5.0.0")
+app = FastAPI(title="DiffIQ Document Comparison API", version="7.0.0")
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "*").split(",") if x.strip()]
 app.add_middleware(
     CORSMiddleware,
@@ -56,10 +56,22 @@ def word_key(s: str) -> str:
     return re.sub(r"\s+", " ", canonical(s))
 
 
+def pdf_match_key(text: str) -> str:
+    """Comparison key for PDF words. Ignore surrounding PDF punctuation/spacing noise.
+
+    Word->PDF conversion commonly changes commas/periods/quotes or splits tokens such as
+    ``A3,`` while leaving the actual word unchanged. Those extraction artifacts must not
+    cause neighboring words to become a giant replacement region.
+    """
+    s = canonical(text)
+    s = re.sub(r"^[^\w₹€£$%]+|[^\w₹€£$%]+$", "", s, flags=re.UNICODE)
+    return s
+
+
 def pdf_page_key(page: dict) -> str:
     # A compact page fingerprint used only to align pages; no highlighting is based on it.
     words = page.get("words", [])
-    vals = [word_key(w.get("text", "")) for w in words if word_key(w.get("text", ""))]
+    vals = [pdf_match_key(w.get("text", "")) for w in words if pdf_match_key(w.get("text", ""))]
     if not vals:
         return ""
     # Include enough content to distinguish neighboring pages while keeping alignment cheap.
@@ -378,6 +390,75 @@ def page_alignment(left_pages, right_pages):
     return pairs
 
 
+def _word_sequence(page):
+    """Return words in the extractor's already-grouped reading order.
+
+    Never re-sort the raw word list here: PDF text coordinates can contain tiny baseline
+    differences, and sorting raw words by Y can interleave adjacent lines. The line extractor
+    has already resolved that problem and preserves line/word reading order.
+    """
+    blocks = list(page.get("blocks", []) or [])
+    words = []
+    for block in blocks:
+        for w in block.get("items", []) or []:
+            if w.get("text"):
+                words.append(w)
+    return words
+
+
+def _make_word_change(tag, lwords, rwords):
+    """Build a change using ONLY the words proven different by the word diff."""
+    if tag == "delete":
+        return {"type": "removed", "left": make_word_block(lwords), "right": None,
+                "tokens": [{"type": "removed", "left": " ".join(w["text"] for w in lwords), "right": ""}]}
+    if tag == "insert":
+        return {"type": "added", "left": None, "right": make_word_block(rwords),
+                "tokens": [{"type": "added", "left": "", "right": " ".join(w["text"] for w in rwords)}]}
+    if not lwords and not rwords:
+        return None
+    return {"type": "modified", "left": make_word_block(lwords) if lwords else None,
+            "right": make_word_block(rwords) if rwords else None,
+            "tokens": [{"type": "modified", "left": " ".join(w["text"] for w in lwords),
+                         "right": " ".join(w["text"] for w in rwords)}]}
+
+
+def _diff_page_words(lpage, rpage):
+    """Diff a matched PDF page globally at WORD level.
+
+    This deliberately does not diff line bounding boxes. Word->PDF conversion frequently
+    re-wraps lines, changes line grouping, or changes extraction whitespace. A global word
+    sequence keeps unchanged words as anchors and returns coordinates only for words inside
+    real replace/insert/delete spans.
+    """
+    lw = _word_sequence(lpage)
+    rw = _word_sequence(rpage)
+    ka = [pdf_match_key(w.get("text", "")) for w in lw]
+    kb = [pdf_match_key(w.get("text", "")) for w in rw]
+    sm = SequenceMatcher(None, ka, kb, autojunk=False)
+    changes = []
+    same = 0
+    changed_words = 0
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            same += i2 - i1
+            continue
+        lseg, rseg = lw[i1:i2], rw[j1:j2]
+        # Never turn a weakly aligned giant replacement into a page-sized highlight.
+        # This is a safety valve for pathological PDF extraction order.
+        span = max(i2 - i1, j2 - j1)
+        if span > 80:
+            local_ratio = SequenceMatcher(None, ka[i1:i2], kb[j1:j2], autojunk=False).ratio()
+            if local_ratio < 0.18:
+                # Leave this region unpainted; the textual result still remains available
+                # through the comparison summary rather than producing a misleading overlay.
+                continue
+        c = _make_word_change(tag, lseg, rseg)
+        if c:
+            changes.append(c)
+            changed_words += len(lseg) + len(rseg)
+    return changes, same, changed_words, len(lw), len(rw)
+
+
 def pdf_diff(left, right):
     lp, rp = left["pages"], right["pages"]
     changes = []
@@ -393,13 +474,13 @@ def pdf_diff(left, right):
             total_right += len(rpage.get("words", []))
 
         if mode == "delete":
-            words = lpage.get("words", []) if lpage else []
+            words = _word_sequence(lpage) if lpage else []
             if words:
                 changes.append({"type": "removed", "left": make_word_block(words), "right": None,
                                 "tokens": [{"type": "removed", "left": " ".join(w["text"] for w in words), "right": ""}]})
             continue
         if mode == "insert":
-            words = rpage.get("words", []) if rpage else []
+            words = _word_sequence(rpage) if rpage else []
             if words:
                 changes.append({"type": "added", "left": None, "right": make_word_block(words),
                                 "tokens": [{"type": "added", "left": "", "right": " ".join(w["text"] for w in words)}]})
@@ -407,89 +488,9 @@ def pdf_diff(left, right):
         if not lpage or not rpage:
             continue
 
-        ll = lpage.get("blocks", [])
-        rr = rpage.get("blocks", [])
-        A = [tuple(line_key(x)) for x in ll]
-        B = [tuple(line_key(x)) for x in rr]
-        # Compare line signatures. A line signature is a list of words, so formatting/spacing changes do not explode the diff.
-        sm = SequenceMatcher(None, A, B, autojunk=False)
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag == "equal":
-                same_word_count += sum(len(ll[k].get("items", [])) for k in range(i1, i2))
-                continue
-            if tag == "delete":
-                for k in range(i1, i2):
-                    words = ll[k].get("items", [])
-                    if words:
-                        changes.append({"type": "removed", "left": make_word_block(words), "right": None,
-                                        "tokens": [{"type": "removed", "left": ll[k]["text"], "right": ""}]})
-                continue
-            if tag == "insert":
-                for k in range(j1, j2):
-                    words = rr[k].get("items", [])
-                    if words:
-                        changes.append({"type": "added", "left": None, "right": make_word_block(words),
-                                        "tokens": [{"type": "added", "left": "", "right": rr[k]["text"]}]})
-                continue
-
-            # Replacement: align lines by content, not by position. This is important when
-            # Word->PDF conversion re-wraps a paragraph after one word changes.
-            lblock = ll[i1:i2]
-            rblock = rr[j1:j2]
-            LA = [tuple(line_key(x)) for x in lblock]
-            RB = [tuple(line_key(x)) for x in rblock]
-            lsm = SequenceMatcher(None, LA, RB, autojunk=False)
-            for ltag, a1, a2, b1, b2 in lsm.get_opcodes():
-                if ltag == "equal":
-                    same_word_count += sum(len(lblock[k].get("items", [])) for k in range(a1, a2))
-                elif ltag == "delete":
-                    for k in range(a1, a2):
-                        words = lblock[k].get("items", [])
-                        if words:
-                            changes.append({"type": "removed", "left": make_word_block(words), "right": None,
-                                            "tokens": [{"type": "removed", "left": lblock[k]["text"], "right": ""}]})
-                elif ltag == "insert":
-                    for k in range(b1, b2):
-                        words = rblock[k].get("items", [])
-                        if words:
-                            changes.append({"type": "added", "left": None, "right": make_word_block(words),
-                                            "tokens": [{"type": "added", "left": "", "right": rblock[k]["text"]}]})
-                else:
-                    ln2, rn2 = a2 - a1, b2 - b1
-                    # If wrapping differs, flatten this small replacement region so common
-                    # words can anchor the diff across line boundaries.
-                    if ln2 != rn2 and (ln2 <= 3 and rn2 <= 3):
-                        lw = [w for k in range(a1, a2) for w in lblock[k].get("items", [])]
-                        rw = [w for k in range(b1, b2) for w in rblock[k].get("items", [])]
-                        ka, kb = [word_key(w["text"]) for w in lw], [word_key(w["text"]) for w in rw]
-                        wsm = SequenceMatcher(None, ka, kb, autojunk=False)
-                        for wtag, wi1, wi2, wj1, wj2 in wsm.get_opcodes():
-                            if wtag == "equal":
-                                same_word_count += wi2 - wi1
-                                continue
-                            lwords, rwords = lw[wi1:wi2], rw[wj1:wj2]
-                            if wtag == "delete":
-                                changes.append({"type":"removed","left":make_word_block(lwords),"right":None,"tokens":[{"type":"removed","left":" ".join(w["text"] for w in lwords),"right":""}]})
-                            elif wtag == "insert":
-                                changes.append({"type":"added","left":None,"right":make_word_block(rwords),"tokens":[{"type":"added","left":"","right":" ".join(w["text"] for w in rwords)}]})
-                            else:
-                                changes.append({"type":"modified","left":make_word_block(lwords),"right":make_word_block(rwords),"tokens":[{"type":"modified","left":" ".join(w["text"] for w in lwords),"right":" ".join(w["text"] for w in rwords)}]})
-                    else:
-                        n2 = min(ln2, rn2)
-                        for k in range(n2):
-                            c = word_level_change(lblock[a1+k], rblock[b1+k])
-                            if c:
-                                changes.append(c)
-                            else:
-                                same_word_count += min(len(lblock[a1+k].get("items", [])), len(rblock[b1+k].get("items", [])))
-                        for k in range(a1+n2, a2):
-                            words = lblock[k].get("items", [])
-                            if words:
-                                changes.append({"type":"removed","left":make_word_block(words),"right":None,"tokens":[{"type":"removed","left":lblock[k]["text"],"right":""}]})
-                        for k in range(b1+n2, b2):
-                            words = rblock[k].get("items", [])
-                            if words:
-                                changes.append({"type":"added","left":None,"right":make_word_block(words),"tokens":[{"type":"added","left":"","right":rblock[k]["text"]}]})
+        page_changes, same, _, _, _ = _diff_page_words(lpage, rpage)
+        same_word_count += same
+        changes.extend(page_changes)
 
     summary = {"same": same_word_count, "added": 0, "removed": 0, "modified": 0}
     for c in changes:
@@ -508,7 +509,7 @@ def pdf_diff(left, right):
         "changes": changes,
         "left": {k: v for k, v in left.items() if k not in {"blocks", "words"}},
         "right": {k: v for k, v in right.items() if k not in {"blocks", "words"}},
-        "engine": "DiffIQ PDF page/line/word coordinate comparison v5",
+        "engine": "DiffIQ PDF page/word coordinate comparison v7",
     }
 
 
