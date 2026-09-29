@@ -1,4 +1,5 @@
 const { issueSignedToken, presignUrl } = require('@vercel/blob');
+const { randomUUID } = require('crypto');
 
 function send(res, status, body) {
   res.status(status).json(body);
@@ -39,7 +40,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const pathname = `doc-compare/${Date.now()}-${crypto.randomUUID()}-${name}`;
+    const pathname = `doc-compare/${Date.now()}-${randomUUID()}-${name}`;
 
     const token = await issueSignedToken({
       operations: ['put']
