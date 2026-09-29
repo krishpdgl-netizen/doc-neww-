@@ -454,22 +454,33 @@ function dice(a,b){
 // are treated as equal (recognition noise). Numbers are ALWAYS compared strictly.
 function wordEq(a,b,ocr){
   if(a===b)return true;
-  if(!ocr||a.length<4||b.length<4||/\d/.test(a+b))return false;
+  if(!ocr)return false;
+  // scans confuse "," and "." inside numbers (14,400 vs 14.400): compare digits only
+  if(/\d/.test(a)&&/\d/.test(b))return a.replace(/[.,]/g,'')===b.replace(/[.,]/g,'');
+  if(a.length<4||b.length<4)return false;
+  if(a.startsWith(b)||b.startsWith(a))return false; // pure suffix/prefix change (terminate/terminated) is a real edit, not OCR noise
   return dice(a,b)>=0.8;
 }
+function isEnum(t,next){
+  if(!t)return false;
+  if(/^(?:\(?\d{1,3}(?:\.\d{1,3}){0,4}[.)]|\([a-zA-Z]{1,3}\)|[ivxIVX]{1,5}[.)]|[a-zA-Z][.)]|[\u2022\u00b7\u25aa\u25e6*\u2013\u2014-])$/.test(t))return true;
+  return /^\d{1,3}(?:\.\d{1,3}){1,4}$/.test(t)&&/^[A-Z]/.test(next||'');
+}
+// Leading list numbers ("4.", "(a)", "2.1") are shown but excluded from comparison, so renumbering never looks like a change.
 function mkBlock(words,ocr,page){
   const ws=[];
   for(const w of words){const k=normWord(w.t);if(!k)continue;ws.push({t:w.t,k,bx:w.bx||null,p:w.p!==undefined?w.p:page,conf:w.conf});}
   if(!ws.length)return null;
-  const key=ws.map(w=>w.k).join(' ');
-  return{words:ws,text:ws.map(w=>w.t).join(' '),key,dg:digs(key),ocr:!!ocr,page};
+  if(ws.length>=2&&isEnum(ws[0].t,ws[1].t))ws[0].skip=true;
+  const dw=ws.filter(w=>!w.skip),key=dw.map(w=>w.k).join(' ');
+  return{words:ws,dw,text:ws.map(w=>w.t).join(' '),key,dg:digs(key),ocr:!!ocr,page};
 }
 function blockEq(a,b,ocr){
   if(a.key===b.key)return true;
-  if(!ocr||a.dg!==b.dg||a.words.length!==b.words.length)return false;
+  if(!ocr||a.dw.length!==b.dw.length)return false;
   const la=a.key.length,lb=b.key.length;
   if(Math.abs(la-lb)>Math.max(3,.1*Math.max(la,lb)))return false;
-  for(let i=0;i<a.words.length;i++)if(!wordEq(a.words[i].k,b.words[i].k,true))return false;
+  for(let i=0;i<a.dw.length;i++)if(!wordEq(a.dw[i].k,b.dw[i].k,true))return false;
   return true;
 }
 function splitSents(t){return t.replace(/\r\n/g,'\n').split('\n').map(s=>s.trim()).filter(Boolean);}
@@ -496,7 +507,6 @@ function htmlToText(html){
 function linesToBlocks(lines,ocr,p){
   const blocks=[];let cur=[],prev=null;
   const maxW=Math.max(0.01,...lines.map(l=>l.x1-l.x0));
-  // typical line pitch on this page: paragraph breaks are gaps clearly larger than the median pitch
   const pitches=[];for(let i=1;i<lines.length;i++){const d=lines[i].cy-lines[i-1].cy;if(d>0)pitches.push(d);}
   pitches.sort((a,b)=>a-b);
   const med=pitches.length>=3?pitches[Math.floor(pitches.length/2)]:0;
@@ -506,10 +516,10 @@ function linesToBlocks(lines,ocr,p){
       const gap=l.cy-prev.cy,last=prev.words[prev.words.length-1].t;
       const endsSent=/[.:;!?]["')\]]?$/.test(last),short=(prev.x1-prev.x0)<0.72*maxW;
       const bigGap=med?gap>1.3*med:gap>1.6*Math.max(l.h,prev.h);
-      if(bigGap||gap<-0.5*l.h||(endsSent&&short))flush();
+      const startsEnum=l.words.length>=2&&isEnum(l.words[0].t,l.words[1].t);
+      if(bigGap||gap<-0.5*l.h||(endsSent&&short)||l.iso||prev.iso||startsEnum||!!l.tab!==!!prev.tab)flush();
     }
     const ws=l.words.map(w=>({t:w.t,bx:[w.box],conf:w.conf}));
-    // de-hyphenate words broken across lines (union of both boxes so highlights cover both halves)
     if(cur.length&&prev&&ws.length&&/\p{L}{2,}-$/u.test(cur[cur.length-1].t)&&/^\p{Ll}/u.test(ws[0].t)){
       const lw=cur[cur.length-1],f=ws.shift();
       lw.t=lw.t.slice(0,-1)+f.t;lw.bx=lw.bx.concat(f.bx);
@@ -517,6 +527,35 @@ function linesToBlocks(lines,ocr,p){
     cur.push(...ws);prev=l;
   }
   flush();return blocks;
+}
+// A line is "tabular" when it has wide internal gaps (table columns): tables become their own blocks.
+function markTab(lines,ar){
+  for(const l of lines){
+    l.tab=false;if(l.words.length<2)continue;
+    const hx=l.h*ar;
+    for(let i=0;i<l.words.length-1;i++)if(l.words[i+1].box[0]-l.words[i].box[2]>2.2*hx){l.tab=true;break;}
+  }
+  return lines;
+}
+// Running headers/footers (same text in the page margins of most pages) and page numbers must not glue onto body paragraphs.
+function stripRunning(P){
+  const n=P.length,zone=l=>l.cy<0.11?'t':l.cy>0.89?'b':'';
+  const sig=l=>l.words.map(w=>w.t).join(' ').toLowerCase().replace(/\d+/g,'#').replace(/\s+/g,' ').trim();
+  const PN=/^(?:page\s*)?#(?:\s*(?:of|\/)\s*#)?$|^[-\u2013\u2014]\s*#\s*[-\u2013\u2014]$/;
+  const cand=[];P.forEach((pg,pi)=>pg.lines.forEach(l=>{const z=zone(l);if(z)cand.push({pi,l,z,sg:sig(l)});}));
+  const drop=new Set(),run=[];
+  for(const c of cand){
+    if(PN.test(c.sg)){drop.add(c.l);continue;}
+    if(n<2)continue;
+    const pages=new Set([c.pi]);
+    for(const o of cand){if(o.pi!==c.pi&&o.z===c.z&&(o.sg===c.sg||dice(o.sg,c.sg)>=0.85))pages.add(o.pi);}
+    if(pages.size>=Math.max(2,Math.ceil(n*0.5)))run.push(c);
+  }
+  const seen=[];
+  for(const c of run){
+    if(seen.some(x=>x===c.sg||dice(x,c.sg)>=0.85))drop.add(c.l);else{seen.push(c.sg);c.l.iso=true;}
+  }
+  P.forEach(pg=>{pg.lines=pg.lines.filter(l=>!drop.has(l));});
 }
 function nativeLines(items,vp){
   const toks=[];
@@ -535,17 +574,17 @@ function nativeLines(items,vp){
     else{cur={cy:t.cy,h:t.h,words:[t]};lines.push(cur);}
   }
   lines.forEach(l=>{l.words.sort((a,b)=>a.box[0]-b.box[0]);l.x0=l.words[0].box[0];l.x1=Math.max(...l.words.map(w=>w.box[2]));});
-  return lines;
+  return markTab(lines,vp.height/vp.width);
 }
 function ocrLines(data,cw,chh){
   const lines=[];
   for(const L of (data.lines||[])){
     const ws=(L.words||[]).filter(w=>w.text&&w.text.trim()&&!(w.text.trim().length<=2&&w.confidence<40&&!/[A-Za-z0-9]/.test(w.text)));
     if(!ws.length)continue;
-    const words=ws.map(w=>({t:w.text.trim(),box:[w.bbox.x0/cw,w.bbox.y0/chh,w.bbox.x1/cw,w.bbox.y1/chh],conf:w.confidence}));
+    const words=ws.map(w=>{const b=[w.bbox.x0/cw,w.bbox.y0/chh,w.bbox.x1/cw,w.bbox.y1/chh];return{t:w.text.trim(),box:b,box0:b,conf:w.confidence};});
     lines.push({words,cy:(L.bbox.y0+L.bbox.y1)/2/chh,h:(L.bbox.y1-L.bbox.y0)/chh,x0:L.bbox.x0/cw,x1:L.bbox.x1/cw});
   }
-  return lines;
+  return markTab(lines,chh/cw);
 }
 // Grayscale + percentile contrast stretch: evens out grey/yellowed scans before recognition.
 function enhance(cv){
@@ -555,6 +594,89 @@ function enhance(cv){
   for(;lo<254&&(s+=hist[lo])<tot*.01;lo++);s=0;for(;hi>1&&(s+=hist[hi])<tot*.01;hi--);
   const r=Math.max(1,hi-lo);
   for(let i=0;i<a.length;i+=4){const v=Math.max(0,Math.min(255,((a[i]-lo)*255/r)|0));a[i]=a[i+1]=a[i+2]=v;}
+  c.putImageData(d,0,0);
+}
+
+// ── Scan preparation: deskew, ink-coverage check, best-of OCR passes ─────────
+function inkMap(cv,W){
+  const sc=W/cv.width,w=W,h=Math.max(1,Math.round(cv.height*sc)),t=document.createElement('canvas');t.width=w;t.height=h;
+  const c=t.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,w,h);c.drawImage(cv,0,0,w,h);
+  const d=c.getImageData(0,0,w,h).data,g=new Uint8Array(w*h),hist=new Uint32Array(256);
+  for(let i=0;i<w*h;i++){g[i]=d[i*4];hist[g[i]]++;}
+  let sum=0;for(let i=0;i<256;i++)sum+=i*hist[i];
+  let sB=0,wB=0,mx=0,th=128;
+  for(let i=0;i<256;i++){wB+=hist[i];if(!wB)continue;const wF=w*h-wB;if(!wF)break;sB+=i*hist[i];const mB=sB/wB,mF=(sum-sB)/wF,b=wB*wF*(mB-mF)*(mB-mF);if(b>mx){mx=b;th=i;}}
+  const ink=new Uint8Array(w*h);for(let i=0;i<w*h;i++)ink[i]=g[i]<th?1:0;
+  t.width=t.height=0;return{w,h,ink};
+}
+function estimateSkew(cv){
+  const m=inkMap(cv,700),pts=[];
+  for(let y=0;y<m.h;y++)for(let x=0;x<m.w;x++)if(m.ink[y*m.w+x])pts.push(x,y);
+  if(pts.length<400)return 0;
+  const score=deg=>{
+    const t=deg*Math.PI/180,cs=Math.cos(t),sn=Math.sin(t),bins=new Float64Array(m.h*2+m.w+8),off=m.w+4;
+    for(let i=0;i<pts.length;i+=2){const yy=Math.round(-pts[i]*sn+pts[i+1]*cs)+off;bins[yy]++;}
+    let sc=0;for(let i=0;i<bins.length;i++)sc+=bins[i]*bins[i];return sc;
+  };
+  let best=0,bs=score(0);
+  for(let a=-6;a<=6.001;a+=0.5){const sc=score(a);if(sc>bs){bs=sc;best=a;}}
+  for(let a=best-0.5;a<=best+0.501;a+=0.1){const sc=score(a);if(sc>bs){bs=sc;best=a;}}
+  return Math.abs(best)<0.2?0:best;
+}
+function deskewCanvas(cv,deg){
+  if(!deg)return cv;
+  const o=document.createElement('canvas');o.width=cv.width;o.height=cv.height;
+  const c=o.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,o.width,o.height);
+  c.translate(o.width/2,o.height/2);c.rotate(-deg*Math.PI/180);c.drawImage(cv,-cv.width/2,-cv.height/2);
+  return o;
+}
+// map a box from the deskewed canvas back to the original page (fractions in, fractions out)
+function unrotateBox(b,deg,ar){
+  if(!deg)return b;
+  const t=deg*Math.PI/180,cs=Math.cos(t),sn=Math.sin(t),xs=[],ys=[];
+  for(const[x,y]of[[b[0],b[1]],[b[2],b[1]],[b[0],b[3]],[b[2],b[3]]]){
+    const dx=x-.5,dy=(y-.5)*ar; // work in width units so the rotation is not skewed by the page aspect ratio
+    xs.push(.5+dx*cs-dy*sn);ys.push(.5+(dx*sn+dy*cs)/ar);
+  }
+  return[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)];
+}
+function uncoveredInk(cv,lines){
+  const m=inkMap(cv,800),cov=new Uint8Array(m.w*m.h);
+  for(const l of lines)for(const w of l.words){
+    const x0=Math.max(0,Math.floor(w.box0[0]*m.w)-2),x1=Math.min(m.w-1,Math.ceil(w.box0[2]*m.w)+2),y0=Math.max(0,Math.floor(w.box0[1]*m.h)-2),y1=Math.min(m.h-1,Math.ceil(w.box0[3]*m.h)+2);
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)cov[y*m.w+x]=1;
+  }
+  let ink=0,miss=0;for(let i=0;i<m.w*m.h;i++)if(m.ink[i]){ink++;if(!cov[i])miss++;}
+  return ink?miss/ink:0;
+}
+async function ocrBest(cv,deg,origAr){
+  const w=await getOcr();
+  const passes=[['3',false],['6',false],['4',true]];let best=null;
+  for(const[psm,bin]of passes){
+    let img=cv;
+    if(bin){img=document.createElement('canvas');img.width=cv.width;img.height=cv.height;img.getContext('2d').drawImage(cv,0,0);binarize(img);}
+    await w.setParameters({tessedit_pageseg_mode:psm,user_defined_dpi:'300'});
+    const r=await w.recognize(img);
+    const lines=ocrLines(r.data,cv.width,cv.height);
+    const miss=uncoveredInk(cv,lines),nw=lines.reduce((n,l)=>n+l.words.length,0);
+    if(!best||miss<best.miss-0.02)best={lines,miss,nw,psm};
+    if(bin&&img!==cv){img.width=img.height=0;}
+    if(best.miss<0.12)break;
+  }
+  // keep coordinates in the deskewed frame for grouping; add page-frame boxes for highlights
+  for(const l of best.lines)for(const wd of l.words){wd.box=unrotateBox(wd.box0,deg,origAr);}
+  return best.lines;
+}
+function binarize(cv){
+  const c=cv.getContext('2d'),d=c.getImageData(0,0,cv.width,cv.height),a=d.data,w=cv.width,h=cv.height;
+  // adaptive threshold: pixel is ink when clearly darker than its local mean (integral image)
+  const I=new Float64Array((w+1)*(h+1));
+  for(let y=0;y<h;y++){let r=0;for(let x=0;x<w;x++){r+=a[(y*w+x)*4];I[(y+1)*(w+1)+x+1]=I[y*(w+1)+x+1]+r;}}
+  const R=Math.max(8,Math.round(w/60));
+  for(let y=0;y<h;y++){const y0=Math.max(0,y-R),y1=Math.min(h,y+R+1);
+    for(let x=0;x<w;x++){const x0=Math.max(0,x-R),x1=Math.min(w,x+R+1);
+      const n=(x1-x0)*(y1-y0),sm=I[y1*(w+1)+x1]-I[y0*(w+1)+x1]-I[y1*(w+1)+x0]+I[y0*(w+1)+x0];
+      const v=a[(y*w+x)*4]<sm/n*0.85?0:255,i=(y*w+x)*4;a[i]=a[i+1]=a[i+2]=v;}}
   c.putImageData(d,0,0);
 }
 
@@ -581,7 +703,7 @@ async function extractPdf(file){
   await loadPdfJs();
   const buf=await readBuf(file);
   const pdfDoc=await window.pdfjsLib.getDocument({data:new Uint8Array(buf.slice(0))}).promise;
-  const pageCount=pdfDoc.numPages,blocks=[],pages=[];let ocrPages=0;
+  const pageCount=pdfDoc.numPages,pages=[],PL=[];let ocrPages=0;
   const detail=$('prog-detail'),track=$('prog-page-track'),bar=$('prog-page-bar');
   if(track)track.style.display='block';
   for(let p=1;p<=pageCount;p++){
@@ -592,9 +714,9 @@ async function extractPdf(file){
     const tc=await page.getTextContent();
     const items=tc.items.filter(i=>i.str&&i.str.trim());
     const nChars=items.reduce((n,i)=>n+i.str.trim().length,0);
-    let pb=[],usedOcr=false;
+    let lines=[],usedOcr=false;
     if(nChars>=30){
-      pb=linesToBlocks(nativeLines(items,vp),false,p-1);
+      lines=nativeLines(items,vp);
     }else{
       usedOcr=true;ocrPages++;
       if(detail)detail.innerHTML=`${esc(file.name)} — page ${p} of ${pageCount} <span class="ocr-badge"><i class="ti ti-eye"></i> OCR</span>`;
@@ -602,14 +724,17 @@ async function extractPdf(file){
       const cv=document.createElement('canvas');cv.width=Math.round(v.width);cv.height=Math.round(v.height);
       await page.render({canvasContext:cv.getContext('2d'),viewport:v}).promise;
       enhance(cv);
-      const w=await getOcr(),r=await w.recognize(cv);
-      pb=linesToBlocks(ocrLines(r.data,cv.width,cv.height),true,p-1);
+      const skew=estimateSkew(cv),dk=deskewCanvas(cv,skew);
+      lines=await ocrBest(dk,skew,cv.height/cv.width);
+      if(dk!==cv)dk.width=dk.height=0;
       cv.width=cv.height=0;
-      if(!pb.length&&nChars)pb=linesToBlocks(nativeLines(items,vp),false,p-1);
+      if(!lines.length&&nChars){lines=nativeLines(items,vp);usedOcr=false;}
     }
+    PL.push({lines,ocr:usedOcr});
     pages.push({w:vp.width,h:vp.height,ocr:usedOcr});
-    blocks.push(...pb);
   }
+  stripRunning(PL);
+  const blocks=[];PL.forEach((pg,i)=>blocks.push(...linesToBlocks(pg.lines,pg.ocr,i)));
   if(bar)bar.style.width='100%';
   if(detail)detail.innerHTML=ocrPages?`Extracted ${pageCount} pages <span class="ocr-badge"><i class="ti ti-eye"></i> OCR used on ${ocrPages} page${ocrPages>1?'s':''}</span>`:`Extracted ${pageCount} pages (native text layer)`;
   const text=blocks.map(b=>b.text).join('\n');
@@ -683,7 +808,7 @@ async function extract(file){
 // PDFs are uploaded directly from the browser to Vercel Blob using a short-lived
 // signed PUT URL. Only the small Blob pathnames are sent to the Vercel function,
 // so the 4.5 MB Vercel Function request-body limit is not hit.
-const GEMINI_MODEL='gemini-3.5-flash-lite';
+const GEMINI_MODEL='gemini-3.1-flash-lite';
 
 function parseGeminiJson(text){
   let t=String(text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
@@ -717,10 +842,11 @@ Preserve changed wording EXACTLY as it appears in the relevant PDF. Never paraph
     // Upload directly from browser to Blob. The browser never receives the Blob store credential.
     [oldPath,newPath]=await Promise.all([uploadPdfToBlob(oldFile),uploadPdfToBlob(newFile)]);
 
+    const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),150000);
     const resp=await fetch('/api/gemini',{
-      method:'POST',headers:{'Content-Type':'application/json'},
+      method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,
       body:JSON.stringify({model:GEMINI_MODEL,prompt,oldPath,newPath})
-    });
+    }).catch(e=>{throw new Error(e.name==='AbortError'?'AI check timed out':e.message);}).finally(()=>clearTimeout(tm));
     const raw=await resp.text(); let payload={}; try{payload=JSON.parse(raw);}catch(e){}
     if(!resp.ok)throw new Error(payload.error||`Gemini server request failed (${resp.status}).`);
     const parsed=parseGeminiJson(payload.text||'');
@@ -768,6 +894,39 @@ function geminiChangesToLocal(gChanges,ob,nb){
       oldBoxes:boxesOf(rmWords),newBoxes:boxesOf(addWords),oldAnchor:anchorOf(ob,oi,0),newAnchor:anchorOf(nb,ni,0),page:ni[0]??oi[0]??0,ocr:[...oi.map(i=>ob[i]),...ni.map(i=>nb[i])].some(b=>b?.ocr),conf:confs.length?Math.round(Math.min(...confs)):null,...cl,gemini:true});
   }
   return out;
+}
+
+// The deterministic local diff is the source of truth (exact words, exact boxes, numbers strict).
+// AI findings are only ADDED when they are locatable in the text and not already covered by a local change.
+function mergeAiChanges(local,ai,ob,nb){
+  const ks=c=>new Set([...(c.rmWords||[]),...(c.addWords||[])].map(w=>w.k));
+  const lset=local.map(ks),OK=' '+ob.map(b=>b.key).join(' ')+' ',NK=' '+nb.map(b=>b.key).join(' ')+' ';
+  let added=0;const out=local.slice();
+  for(const g of ai){
+    const oldOk=!g.oldText||g.rmWords.length>0,newOk=!g.newText||g.addWords.length>0;
+    if(!oldOk||!newOk)continue;                                   // cannot be located in the document text: treat as unverified
+    if(g.oldText&&g.newText&&g.oldText.split(/\s+/).map(normWord).join(' ')===g.newText.split(/\s+/).map(normWord).join(' '))continue;
+    const nrm=t=>String(t||'').split(/\s+/).map(normWord).filter(Boolean).join(' ');
+    const ot=nrm(g.oldText),nt=nrm(g.newText);
+    // an AI claim that contradicts the document text (a "deleted" passage still present in the new file, an "added" one already in the old) is rejected
+    if(ot.length>=12&&(g.type==='deleted'||g.type==='modified')&&NK.includes(' '+ot+' '))continue;
+    if(nt.length>=12&&(g.type==='added'||g.type==='modified')&&OK.includes(' '+nt+' '))continue;
+    const gk=ks(g);if(!gk.size)continue;
+    const covered=local.some((c,i)=>{
+      const lk=lset[i];if(!lk.size)return false;
+      let n=0;gk.forEach(k=>{if(lk.has(k))n++;});
+      const ov=n/Math.min(gk.size,lk.size);
+      const sameBlock=g.oldIdxs.some(x=>c.oldIdxs.includes(x))||g.newIdxs.some(x=>c.newIdxs.includes(x));
+      return ov>=0.8||(sameBlock&&ov>=0.5);
+    });
+    if(covered)continue;
+    g.ai=true;if(!g.cats.includes('ai'))g.cats.push('ai');
+    if(g.sev==='low')g.sev='medium';
+    out.push(g);added++;
+  }
+  const pos=c=>(c.page||0)*1e6+(c.oldIdx>=0?c.oldIdx:Math.max(0,c.newIdx));
+  out.sort((a,b)=>pos(a)-pos(b));out.forEach((c,i)=>c.id=i+1);
+  return{changes:out,added};
 }
 
 // ── Diff helpers ──────────────────────────────────────────────
@@ -865,29 +1024,40 @@ function diffBlocks(ob,nb){
     if(i>po||j>pn)gapChanges(po,i,pn,j,ob,nb,ocr,out,false);
     po=i+1;pn=j+1;
   }
-  // moved: identical text deleted in one place and added in another
-  const addedByKey=new Map();
-  out.forEach((c,ix)=>{if(c.type==='added'&&c.addWords.length>=5)addedByKey.set(c.addWords.map(w=>w.k).join(' '),ix);});
-  const drop=new Set();
-  out.forEach(c=>{
-    if(c.type!=='deleted'||c.rmWords.length<5)return;
-    const k=c.rmWords.map(w=>w.k).join(' '),ix=addedByKey.get(k);
-    if(ix===undefined||drop.has(ix))return;
-    const a=out[ix];drop.add(ix);
-    Object.assign(c,{type:'moved',newIdxs:a.newIdxs,newIdx:a.newIdx,newText:a.newText,addText:a.addText,addWords:a.addWords,newBoxes:a.newBoxes,newAnchor:a.newAnchor,sev:'low'});
-  });
+  // moved: a deleted passage and an added passage with (nearly) the same words
+  const dels=[],adds=[];
+  out.forEach((c,ix)=>{if(c.type==='deleted'&&c.rmWords.length>=6)dels.push(ix);else if(c.type==='added'&&c.addWords.length>=6)adds.push(ix);});
+  const drop=new Set(),extra=[];
+  for(const di of dels){
+    const d=out[di],dk=d.rmWords.map(w=>w.k);let best=-1,bs=0.75;
+    for(const ai of adds){if(drop.has(ai))continue;const sc=wordSim(dk,out[ai].addWords.map(w=>w.k));if(sc>=bs&&(best<0||sc>bs)){bs=sc;best=ai;}}
+    if(best<0)continue;
+    const a=out[best];drop.add(best);
+    const A=d.rmWords,B=a.addWords;
+    Object.assign(d,{type:'moved',newIdxs:a.newIdxs,newIdx:a.newIdx,newText:a.newText,addText:a.addText,addWords:B,newBoxes:a.newBoxes,newAnchor:a.newAnchor,sev:'low'});
+    if(bs<1){ // edited while moving: also report the edits inside the moved text
+      const L=lcsEq(A,B,(x,y)=>wordEq(x.k,y.k,ocr));let ia=0,ib=0;
+      for(const[xa,xb]of[...L,[A.length,B.length]]){
+        if(xa>ia||xb>ib){const rm=A.slice(ia,xa),ad=B.slice(ib,xb);
+          extra.push(buildChange('modified',rm,ad,d.oldIdxs,d.newIdxs,0,0,ob,nb));}
+        ia=xa+1;ib=xb+1;
+      }
+    }
+  }
   const res=out.filter((_,ix)=>!drop.has(ix));
+  res.push(...extra);
+  res.sort((x,y)=>(((x.page||0)*1e6)+(x.oldIdx>=0?x.oldIdx:Math.max(0,x.newIdx)))-(((y.page||0)*1e6)+(y.oldIdx>=0?y.oldIdx:Math.max(0,y.newIdx))));
   res.forEach((c,ix)=>c.id=ix+1);
   return res;
 }
 function gapChanges(o0,o1,n0,n1,ob,nb,ocr,out,small){
   const ow=[],nw=[];
-  for(let i=o0;i<o1;i++)ob[i].words.forEach(w=>ow.push({w,bi:i}));
-  for(let j=n0;j<n1;j++)nb[j].words.forEach(w=>nw.push({w,bi:j}));
+  for(let i=o0;i<o1;i++)ob[i].dw.forEach(w=>ow.push({w,bi:i}));
+  for(let j=n0;j<n1;j++)nb[j].dw.forEach(w=>nw.push({w,bi:j}));
   if((ow.length+1)*(nw.length+1)>LCS_CAP){
     if(small){ // give up on pairing: whole blocks are deleted/added
-      for(let i=o0;i<o1;i++)emit(ob[i].words.map(w=>({w,bi:i})),[],[i],[],o0,n0,ob,nb,ocr,out,new Map(),new Map());
-      for(let j=n0;j<n1;j++)emit([],nb[j].words.map(w=>({w,bi:j})),[],[j],o0,n0,ob,nb,ocr,out,new Map(),new Map());
+      for(let i=o0;i<o1;i++)emit(ob[i].dw.map(w=>({w,bi:i})),[],[i],[],o0,n0,ob,nb,ocr,out,new Map(),new Map());
+      for(let j=n0;j<n1;j++)emit([],nb[j].dw.map(w=>({w,bi:j})),[],[j],o0,n0,ob,nb,ocr,out,new Map(),new Map());
       return;
     }
     // very large gap: pair blocks greedily in order, then diff each pair
@@ -934,9 +1104,17 @@ function emit(oW,nW,forceO,forceN,o0,n0,ob,nb,ocr,out,nbToOb,obToNb){
   let oIdx=forceO||uniq(oW.map(x=>x.bi)),nIdx=forceN||uniq(nW.map(x=>x.bi));
   if(!oIdx.length)oIdx=uniq(nIdx.map(j=>nbToOb.get(j)).filter(v=>v!==undefined));
   if(!nIdx.length)nIdx=uniq(oIdx.map(i=>obToNb.get(i)).filter(v=>v!==undefined));
-  // partner blocks (same paragraph on the other side) make an in-paragraph edit a "modified", not add/delete
   const rmWords=oW.map(x=>x.w),addWords=nW.map(x=>x.w);
-  const type=(oW.length&&nW.length)||(oIdx.length&&nIdx.length)?'modified':oW.length?'deleted':'added';
+  let type;
+  if(rmWords.length&&addWords.length)type='modified';
+  else{
+    const own=rmWords.length?uniq(oW.map(x=>x.bi)):uniq(nW.map(x=>x.bi)),bl=rmWords.length?ob:nb;
+    const tot=own.reduce((n,i)=>n+bl[i].dw.length,0)||1;
+    type=(rmWords.length+addWords.length)/tot>=0.6?(rmWords.length?'deleted':'added'):'modified';
+  }
+  out.push(buildChange(type,rmWords,addWords,oIdx,nIdx,o0,n0,ob,nb));
+}
+function buildChange(type,rmWords,addWords,oIdx,nIdx,o0,n0,ob,nb){
   const oldText=oIdx.map(i=>ob[i].text).join(' ').slice(0,1500),newText=nIdx.map(j=>nb[j].text).join(' ').slice(0,1500);
   const rmText=rmWords.map(w=>w.t).join(' '),addText=addWords.map(w=>w.t).join(' ');
   const cl=classifyChange(rmText,addText,type==='added'?'':oldText,type==='deleted'?'':newText,type);
@@ -944,11 +1122,16 @@ function emit(oW,nW,forceO,forceN,o0,n0,ob,nb,ocr,out,nbToOb,obToNb){
   const isOcr=[...oIdx.map(i=>ob[i]),...nIdx.map(j=>nb[j])].some(b=>b.ocr);
   const conf=confs.length?Math.round(Math.min(...confs)):null;
   if(isOcr&&type==='modified'&&conf!==null&&conf<70&&!cl.cats.includes('numeric'))cl.cats.push('verify');
-  out.push({id:0,type,oldText,newText,rmText,addText,rmWords,addWords,...cl,
+  return{id:0,type,oldText,newText,rmText,addText,rmWords,addWords,...cl,
     oldIdxs:oIdx,newIdxs:nIdx,oldIdx:oIdx.length?oIdx[0]:-1,newIdx:nIdx.length?nIdx[0]:-1,
     oldBoxes:boxesOf(rmWords),newBoxes:boxesOf(addWords),
     oldAnchor:anchorOf(ob,oIdx,o0),newAnchor:anchorOf(nb,nIdx,n0),
-    page:(oW[0]||nW[0]||{w:{}}).w.p,ocr:isOcr,conf});
+    page:(rmWords[0]||addWords[0]||{}).p,ocr:isOcr,conf};
+}
+function wordSim(a,b){
+  const m=new Map();a.forEach(k=>m.set(k,(m.get(k)||0)+1));let n=0;
+  b.forEach(k=>{const c=m.get(k);if(c>0){m.set(k,c-1);n++;}});
+  return a.length+b.length?2*n/(a.length+b.length):1;
 }
 function diffTexts(ot,nt){return diffBlocks(textToBlocks(ot),textToBlocks(nt));}
 
@@ -1075,13 +1258,20 @@ async function runCompare(){
     const isXlsx=oc.type==='xlsx'||nc.type==='xlsx';
     setStage(3);
     await new Promise(r=>setTimeout(r,0));
-    if(oc.type==='pdf'&&nc.type==='pdf'){
-      setStage(4,'Comparing PDFs with Gemini','Understanding document content and locating substantive changes…');
-      const gc=await callGeminiPdfCompare(S.oldFile,S.newFile);
-      S.changes=geminiChangesToLocal(gc,oc.blocks,nc.blocks);
-      if(!S.changes.length)throw new Error('Gemini found no changes that could be mapped to the PDF text.');
-    }else{
-      S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
+    S.aiNote='';
+    S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
+    // Scanned PDFs: ask Gemini for a second opinion. Native PDFs never leave the browser.
+    if(oc.type==='pdf'&&nc.type==='pdf'&&(oc.ocrPageCount||0)+(nc.ocrPageCount||0)>0){
+      setStage(4,'AI check on scanned pages','Local comparison done; asking Gemini to catch anything OCR could have blurred…');
+      try{
+        const gc=await callGeminiPdfCompare(S.oldFile,S.newFile);
+        const m=mergeAiChanges(S.changes,geminiChangesToLocal(gc,oc.blocks,nc.blocks),oc.blocks,nc.blocks);
+        S.changes=m.changes;S.aiNote=m.added?`AI added ${m.added}`:'AI check: no extra changes';
+      }catch(e){
+        console.warn('Gemini check skipped:',e);
+        S.aiNote='AI check unavailable: local result only';
+        S.aiErr=e.message;
+      }
     }
 
     // Stage 4-5: Classify
@@ -1123,6 +1313,7 @@ function buildViewer(){
   if(cnt.date)mr.innerHTML+=`<span class="mpill mp-date">${cnt.date} date</span>`;
   if(cnt.financial)mr.innerHTML+=`<span class="mpill mp-fin">${cnt.financial} financial</span>`;
   if(cnt.high)mr.innerHTML+=`<span class="mpill mp-hi">${cnt.high} high impact</span>`;
+  if(S.aiNote)mr.innerHTML+=`<span class="mpill" title="${esc(S.aiErr||'')}" style="background:var(--purple-bg);color:var(--purple)">${esc(S.aiNote)}</span>`;
   const fr=$('filter-row');fr.innerHTML='';
   [['all','All'],['added','Added'],['deleted','Deleted'],['modified','Modified'],['numeric','Numeric'],['financial','Financial'],['high_impact','High impact']].forEach(([f,l])=>{
     const b=document.createElement('div');b.className='fc'+(f==='all'?' on':'');b.dataset.f=f;b.textContent=l;
@@ -1386,6 +1577,7 @@ function renderList(){
     if(c.sheet)pills+=`<span class="cpill" style="background:var(--card);color:var(--text2)">${c.sheet}!${c.cellRef||''}</span>`;
     if(c.page!==undefined&&c.page!==null)pills+=`<span class="cpill" style="background:var(--card);color:var(--text2)">p.${c.page+1}</span>`;
     if(c.ocr)pills+=`<span class="cpill" style="background:var(--purple-bg);color:var(--purple)">OCR${c.conf!=null?' '+c.conf+'%':''}</span>`;
+    if(c.ai)pills+=`<span class="cpill" style="background:var(--purple-bg);color:var(--purple)">AI</span>`;
     if(c.cats?.includes('verify'))pills+=`<span class="cpill" style="background:var(--amber-bg);color:var(--amber)">verify</span>`;
     let preview='';
     if(c.type==='modified'&&c.rmText&&c.addText){
