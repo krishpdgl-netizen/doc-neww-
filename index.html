@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="DiffIQ"/>
+<meta name="theme-color" content="#0d1117"/>
+<title>DiffIQ — Document Change Intelligence</title>
+<link rel="manifest" href="manifest.json"/>
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css"/>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--panel:#161b27;--card:#1c2333;--card2:#222d42;--border:#2a3347;--border-hi:#3d4f70;
+  --text:#e2e8f5;--text2:#8892a8;--text3:#4d5a72;
+  --green:#22c55e;--green-bg:rgba(34,197,94,.1);--green-dim:rgba(34,197,94,.18);--green-bd:rgba(34,197,94,.3);
+  --red:#ef4444;--red-bg:rgba(239,68,68,.1);--red-dim:rgba(239,68,68,.18);--red-bd:rgba(239,68,68,.3);
+  --amber:#f59e0b;--amber-bg:rgba(245,158,11,.1);--amber-dim:rgba(245,158,11,.18);--amber-bd:rgba(245,158,11,.3);
+  --purple:#a78bfa;--purple-bg:rgba(167,139,250,.1);--purple-dim:rgba(167,139,250,.18);--purple-bd:rgba(167,139,250,.3);
+  --blue:#3b82f6;--blue-bg:rgba(59,130,246,.12);--blue-bd:rgba(59,130,246,.35);
+  --radius:6px;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;font-size:13px;line-height:1.5}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:4px}
+button,input{font-family:inherit}
+.hidden{display:none!important}
+
+#app{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* topbar */
+#topbar{display:flex;align-items:center;height:46px;background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 16px;gap:0}
+.logo{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--text);letter-spacing:-.02em;margin-right:24px}
+.logo-box{width:24px;height:24px;background:var(--blue);border-radius:5px;display:flex;align-items:center;justify-content:center}
+.nav-tab{height:46px;padding:0 14px;display:flex;align-items:center;font-size:12px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;user-select:none}
+.nav-tab:hover{color:var(--text)}
+.nav-tab.on{color:var(--text);border-bottom-color:var(--blue)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:6px}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:var(--radius);font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border-hi);background:transparent;color:var(--text2);transition:all .15s;white-space:nowrap}
+.btn:hover{background:var(--card);color:var(--text)}
+.btn:active{transform:scale(.98)}
+.btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn-primary:hover{background:#2563eb;border-color:#2563eb;color:#fff}
+.btn-primary:disabled{background:var(--card);border-color:var(--border);color:var(--text3);cursor:not-allowed;transform:none}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--blue-bg);border:1px solid var(--blue-bd);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--blue)}
+
+#body{display:flex;flex:1;overflow:hidden}
+
+/* sidebar */
+#sidebar{width:48px;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:2px;flex-shrink:0}
+.sico{width:34px;height:34px;border-radius:var(--radius);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text3);font-size:16px;transition:all .15s}
+.sico:hover,.sico.on{background:var(--card);color:var(--text)}
+.sico.on{color:var(--blue)}
+.sico-bot{margin-top:auto}
+
+/* ── UPLOAD PAGE ── */
+#page-upload{flex:1;overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px}
+.up-header{text-align:center;margin-bottom:32px}
+.up-header h1{font-size:20px;font-weight:700;letter-spacing:-.02em;margin-bottom:8px}
+.up-header p{font-size:13px;color:var(--text2);max-width:440px;line-height:1.6}
+.up-row{display:flex;gap:14px;width:100%;max-width:760px;align-items:stretch}
+.up-arrow{display:flex;align-items:center;justify-content:center;color:var(--text3);flex-shrink:0;padding-top:20px}
+.dropzone{flex:1;min-width:0;border:1.5px dashed var(--border-hi);border-radius:10px;padding:24px 18px;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;transition:all .2s;background:var(--panel)}
+.dropzone:hover,.dropzone.drag{border-color:var(--blue);background:var(--blue-bg)}
+.dropzone.filled{border-style:solid}
+.dz-old:hover,.dz-old.drag{border-color:var(--red)}
+.dz-new:hover,.dz-new.drag{border-color:var(--green)}
+.dz-old.filled{border-color:var(--red-bd)}
+.dz-new.filled{border-color:var(--green-bd)}
+.dz-icon{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:4px}
+.dz-old .dz-icon{background:var(--red-dim)}
+.dz-new .dz-icon{background:var(--green-dim)}
+.dz-title{font-size:13px;font-weight:600;color:var(--text)}
+.dz-hint{font-size:11px;color:var(--text3);text-align:center;line-height:1.5}
+.dz-filename{font-size:11px;color:var(--text2);background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:5px 10px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;text-align:center}
+.format-row{display:flex;gap:4px;flex-wrap:wrap;justify-content:center;margin-top:4px}
+.fmt{font-size:10px;padding:2px 6px;border-radius:3px;background:var(--card);border:1px solid var(--border);color:var(--text3);font-weight:500}
+.config-card{width:100%;max-width:760px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-top:16px}
+.config-title{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px}
+.chip-row{display:flex;gap:5px;flex-wrap:wrap}
+.chip{padding:4px 11px;border-radius:20px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);color:var(--text2);background:transparent;transition:all .15s;user-select:none}
+.chip:hover{border-color:var(--border-hi);color:var(--text)}
+.chip.on{background:var(--blue-bg);border-color:var(--blue-bd);color:var(--blue)}
+.up-actions{display:flex;align-items:center;gap:10px;margin-top:16px;width:100%;max-width:760px;justify-content:flex-end}
+.err-msg{font-size:12px;color:var(--red)}
+.cmp-btn{display:inline-flex;align-items:center;gap:7px;padding:9px 22px;border-radius:var(--radius);font-size:13px;font-weight:600;cursor:pointer;border:none;background:var(--blue);color:#fff;transition:all .15s}
+.cmp-btn:hover{background:#2563eb}
+.cmp-btn:disabled{background:var(--card);color:var(--text3);cursor:not-allowed}
+
+/* ── PROGRESS PAGE ── */
+#page-progress{flex:1;display:flex;align-items:center;justify-content:center}
+.prog-wrap{width:380px}
+.prog-icon-wrap{text-align:center;margin-bottom:20px}
+.spin{animation:spin .8s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.prog-title{font-size:17px;font-weight:700;text-align:center;margin-bottom:4px}
+.prog-sub{font-size:12px;color:var(--text2);text-align:center;margin-bottom:18px}
+.prog-track{height:3px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:6px}
+.prog-fill{height:100%;background:var(--blue);transition:width .4s ease;border-radius:2px}
+.prog-pct{font-size:11px;color:var(--text3);text-align:right;margin-bottom:20px}
+.stage-list{display:flex;flex-direction:column;gap:5px}
+.si{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:12px;color:var(--text3)}
+.si.done{color:var(--green)}.si.active{color:var(--text)}
+.si-dot{width:6px;height:6px;border-radius:50%;background:var(--border);flex-shrink:0}
+.si.done .si-dot{background:var(--green)}
+.si.active .si-dot{background:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.2)}
+.si-check{font-size:12px;color:var(--green)}
+
+/* ── VIEWER PAGE ── */
+#page-viewer{flex:1;display:flex;overflow:hidden}
+
+/* changes panel */
+#changes-panel{width:272px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:var(--panel)}
+.cp-header{padding:12px 13px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+.cp-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.cp-name{font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.total-pill{font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:var(--card);color:var(--text2);border:1px solid var(--border)}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px}
+.sc{padding:7px 9px;border-radius:6px}
+.sc .sv{font-size:17px;font-weight:700;line-height:1}
+.sc .sl{font-size:10px;font-weight:500;margin-top:2px}
+.sc-add{background:var(--green-bg)}.sc-add .sv,.sc-add .sl{color:var(--green)}
+.sc-del{background:var(--red-bg)}.sc-del .sv,.sc-del .sl{color:var(--red)}
+.sc-mod{background:var(--amber-bg)}.sc-mod .sv,.sc-mod .sl{color:var(--amber)}
+.sc-mov{background:var(--purple-bg)}.sc-mov .sv,.sc-mov .sl{color:var(--purple)}
+.meta-row{display:flex;gap:4px;flex-wrap:wrap}
+.mpill{font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px}
+.mp-num{background:var(--blue-bg);color:var(--blue)}
+.mp-fin{background:var(--amber-bg);color:var(--amber)}
+.mp-hi{background:var(--red-bg);color:var(--red)}
+.mp-date{background:var(--purple-bg);color:var(--purple)}
+.cp-search{padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+.search-inp{width:100%;padding:6px 10px;border-radius:var(--radius);border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;outline:none;transition:border .15s}
+.search-inp::placeholder{color:var(--text3)}
+.search-inp:focus{border-color:var(--border-hi)}
+.filter-row{display:flex;gap:3px;flex-wrap:wrap;margin-top:7px}
+.fc{padding:3px 8px;border-radius:20px;font-size:10px;font-weight:500;cursor:pointer;border:1px solid transparent;color:var(--text3);background:transparent;transition:all .15s;user-select:none}
+.fc:hover{color:var(--text);background:var(--card)}
+.fc.on{background:var(--card2);border-color:var(--border-hi);color:var(--text)}
+.change-list{flex:1;overflow-y:auto;padding:6px 8px}
+.ci{padding:8px 10px;border-radius:7px;cursor:pointer;margin-bottom:3px;border:1px solid transparent;transition:all .12s}
+.ci:hover{background:var(--card)}
+.ci.active{background:var(--card2);border-color:var(--border-hi)}
+.ci-head{display:flex;align-items:center;gap:5px;margin-bottom:4px}
+.cnum{font-size:10px;color:var(--text3);min-width:24px;font-variant-numeric:tabular-nums}
+.cbadge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;text-transform:uppercase;letter-spacing:.02em}
+.cb-add{background:var(--green-bg);color:var(--green);border:1px solid var(--green-bd)}
+.cb-del{background:var(--red-bg);color:var(--red);border:1px solid var(--red-bd)}
+.cb-mod{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-bd)}
+.cb-mov{background:var(--purple-bg);color:var(--purple);border:1px solid var(--purple-bd)}
+.csev{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:auto;text-transform:uppercase;letter-spacing:.03em}
+.cs-low{background:var(--card);color:var(--text3)}
+.cs-med{background:var(--amber-bg);color:var(--amber)}
+.cs-high{background:var(--red-bg);color:var(--red)}
+.cs-crit{background:var(--red);color:#fff}
+.ci-text{font-size:11px;color:var(--text2);line-height:1.45;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ci-pills{display:flex;gap:3px;margin-top:5px;flex-wrap:wrap}
+.cpill{font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px}
+.cp-nav{padding:8px 10px;border-top:1px solid var(--border);display:flex;gap:5px;flex-shrink:0}
+.nbtn{flex:1;padding:6px 0;border-radius:var(--radius);font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text2);transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px}
+.nbtn:hover{background:var(--card);color:var(--text);border-color:var(--border-hi)}
+
+/* doc area */
+#doc-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.doc-toolbar{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0}
+.dt-label{font-size:11px;font-weight:500;color:var(--text3)}
+.legend{display:flex;gap:12px;margin-left:auto}
+.leg{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:500;color:var(--text3)}
+.leg-dot{width:7px;height:7px;border-radius:50%}
+.doc-panes{display:flex;flex:1;overflow:hidden}
+.pane{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.pane+.pane{border-left:1px solid var(--border)}
+.pane-hd{padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:7px;flex-shrink:0}
+.pane-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.pane-name{font-size:11px;font-weight:500;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane-badge{font-size:10px;padding:1px 6px;border-radius:3px;margin-left:auto;font-weight:600}
+.pane-body{flex:1;overflow-y:auto;background:var(--card)}
+
+/* rendered doc styles — white background like real doc */
+.doc-render{background:#fff;color:#1a1a18;min-height:100%;padding:36px 44px;font-family:Georgia,'Times New Roman',serif;font-size:13.5px;line-height:1.75}
+.doc-render h1,.doc-render h2,.doc-render h3,.doc-render h4{font-weight:700;margin:1.2em 0 .4em;color:#0d0d0d;font-family:-apple-system,sans-serif}
+.doc-render h1{font-size:19px}.doc-render h2{font-size:16px}.doc-render h3{font-size:14px}
+.doc-render p{margin-bottom:.75em}
+.doc-render table{width:100%;border-collapse:collapse;margin:.9em 0;font-size:12px;font-family:-apple-system,sans-serif}
+.doc-render th,.doc-render td{border:1px solid #ccc;padding:5px 9px;text-align:left}
+.doc-render th{background:#f0f0ee;font-weight:600}
+.doc-render ul,.doc-render ol{margin:.4em 0 .75em 1.4em}
+.doc-render li{margin-bottom:.25em}
+.doc-render strong,.doc-render b{font-weight:700}
+.doc-render em,.doc-render i{font-style:italic}
+.doc-render blockquote{border-left:3px solid #ccc;padding-left:1em;color:#555;margin:1em 0}
+/* highlight classes applied to doc-render elements */
+.hl-add{background:rgba(34,197,94,.18)!important;border-left:3px solid #22c55e!important;padding-left:8px!important;border-radius:0 3px 3px 0!important;cursor:pointer}
+.hl-del{background:rgba(239,68,68,.18)!important;border-left:3px solid #ef4444!important;padding-left:8px!important;border-radius:0 3px 3px 0!important;cursor:pointer}
+.hl-mod{background:rgba(245,158,11,.18)!important;border-left:3px solid #f59e0b!important;padding-left:8px!important;border-radius:0 3px 3px 0!important;cursor:pointer}
+.hl-mov{background:rgba(167,139,250,.18)!important;border-left:3px solid #a78bfa!important;padding-left:8px!important;border-radius:0 3px 3px 0!important;cursor:pointer}
+.focus-ring{outline:2px solid #3b82f6!important;outline-offset:2px!important;border-radius:3px!important}
+mark.rm{background:rgba(239,68,68,.22);color:#b91c1c;border-radius:2px;padding:0 1px}
+mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0 1px}
+
+/* text pane */
+.txt-render{background:#fff;color:#1a1a18;min-height:100%;padding:36px 44px;font-family:'Courier New',monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+.txt-render p{margin-bottom:4px;padding:2px 0;border-left:2px solid transparent}
+.txt-render p.hl-add,.txt-render p.hl-del,.txt-render p.hl-mod,.txt-render p.hl-mov{padding-left:8px}
+
+/* xlsx pane */
+.xlsx-render{background:#fff;min-height:100%;padding:16px}
+.sheet-tab-row{display:flex;gap:2px;margin-bottom:12px;flex-wrap:wrap}
+.sheet-tab{padding:4px 12px;border-radius:4px 4px 0 0;font-size:11px;font-weight:500;cursor:pointer;border:1px solid #ddd;background:#f5f5f3;color:#555;transition:all .15s}
+.sheet-tab.on{background:#fff;color:#111;border-bottom-color:#fff}
+.xlsx-table-wrap{overflow:auto}
+.xlsx-table{border-collapse:collapse;font-size:12px;font-family:-apple-system,sans-serif;min-width:100%}
+.xlsx-table th,.xlsx-table td{border:1px solid #ddd;padding:4px 8px;white-space:nowrap;text-align:left;min-width:60px}
+.xlsx-table th{background:#f0f0ee;font-weight:600;color:#333;position:sticky;top:0}
+.xlsx-table td{color:#1a1a18}
+.xlsx-table tr:hover td{background:#f9f9f7}
+.cell-add{background:rgba(34,197,94,.15)!important;color:#15803d}
+.cell-del{background:rgba(239,68,68,.15)!important;color:#b91c1c}
+.cell-mod{background:rgba(245,158,11,.15)!important;color:#92400e}
+
+/* pdf canvas */
+.pdf-wrap{background:#525659;min-height:100%;display:flex;flex-direction:column;align-items:center;gap:14px;padding:20px;position:relative}
+.pdf-page-wrap{position:relative;display:inline-block}
+.pdf-page-wrap canvas{display:block;max-width:100%}
+.pdf-hl-overlay{position:absolute;top:0;left:0;pointer-events:none}
+.pdf-text-overlay{position:absolute;top:0;left:0;overflow:hidden;opacity:0;line-height:1;white-space:pre;pointer-events:none}
+
+/* detail panel */
+#detail{border-top:1px solid var(--border);background:var(--panel);flex-shrink:0;overflow-y:auto;max-height:200px}
+.detail-empty{display:flex;align-items:center;justify-content:center;height:72px;color:var(--text3);font-size:12px;gap:6px}
+.detail-inner{padding:11px 15px 13px}
+.di-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:9px}
+.di-id{font-size:11px;color:var(--text3)}
+.di-sim{font-size:10px;color:var(--text3);margin-left:auto}
+.di-cols{display:flex;gap:10px}
+.di-col{flex:1;min-width:0}
+.di-label{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:5px}
+.di-box{border-radius:6px;padding:8px 10px;font-size:12px;line-height:1.6}
+.di-old{background:var(--red-bg);border:1px solid var(--red-bd);color:#d1d5db}
+.di-new{background:var(--green-bg);border:1px solid var(--green-bd);color:#d1d5db}
+.di-old mark.rm{background:rgba(239,68,68,0.35);color:#fca5a5;border-radius:3px;padding:1px 3px;font-weight:700;font-style:normal;text-decoration:line-through}
+.di-new mark.ad{background:rgba(34,197,94,0.3);color:#86efac;border-radius:3px;padding:1px 3px;font-weight:700;font-style:normal}
+.di-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.dchip{font-size:11px;font-weight:600;padding:3px 9px;border-radius:4px;font-family:monospace}
+.dch-rm{background:var(--red-dim);color:#fca5a5;text-decoration:line-through}
+.dch-add{background:var(--green-dim);color:#86efac}
+
+.loading-pane{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text2);font-size:12px;gap:8px}
+.ocr-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;background:rgba(167,139,250,.15);color:var(--purple);border:1px solid rgba(167,139,250,.3);margin-left:6px;vertical-align:middle}
+.prog-detail{font-size:11px;color:var(--text3);text-align:center;margin-top:4px;min-height:16px}
+.prog-page-track{height:2px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:6px}
+.prog-page-fill{height:100%;background:var(--purple);transition:width .2s ease;border-radius:2px}
+.pdf-ptag{position:absolute;top:4px;right:6px;z-index:5;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,.55);padding:1px 6px;border-radius:3px;pointer-events:none}
+.pdf-hl{position:absolute;z-index:4;cursor:pointer;border-radius:2px;mix-blend-mode:multiply}
+.pdf-hl.hl-added{background:rgba(34,197,94,.35);border-bottom:2px solid #16a34a}
+.pdf-hl.hl-deleted{background:rgba(239,68,68,.33);border-bottom:2px solid #dc2626}
+.pdf-hl.hl-modified{background:rgba(245,158,11,.38);border-bottom:2px solid #d97706}
+.pdf-hl.hl-moved{background:rgba(167,139,250,.38);border-bottom:2px solid #7c3aed}
+.pdf-anchor{position:absolute;z-index:4;cursor:pointer;border-top:2px dashed rgba(245,158,11,.9);pointer-events:auto}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="logo">
+      <div class="logo-box"><i class="ti ti-files" style="font-size:13px;color:#fff" aria-hidden="true"></i></div>
+      DiffIQ
+    </div>
+    <div class="nav-tab on">Compare</div>
+    <div class="topbar-right">
+      <button class="btn hidden" id="btn-new"><i class="ti ti-plus" style="font-size:12px" aria-hidden="true"></i> New</button>
+      <button class="btn hidden" id="btn-export"><i class="ti ti-download" style="font-size:12px" aria-hidden="true"></i> Export CSV</button>
+      <div class="avatar">KD</div>
+    </div>
+  </div>
+
+  <div id="body">
+    <div id="sidebar">
+      <div class="sico on" title="Compare"><i class="ti ti-git-compare" aria-hidden="true"></i></div>
+      <div class="sico" title="Documents"><i class="ti ti-folder" aria-hidden="true"></i></div>
+      <div class="sico sico-bot" title="Settings"><i class="ti ti-settings" aria-hidden="true"></i></div>
+    </div>
+
+    <!-- UPLOAD -->
+    <div id="page-upload">
+      <div class="up-header">
+        <h1>Document Change Intelligence</h1>
+        <p>Upload two versions of any document to detect, visualize, and understand every meaningful change between them.</p>
+      </div>
+      <div class="up-row">
+        <div class="dropzone dz-old" id="dz-old" tabindex="0" role="button">
+          <div class="dz-icon"><i class="ti ti-file-text" style="color:var(--red);font-size:20px" aria-hidden="true"></i></div>
+          <div class="dz-title">Old version</div>
+          <div class="dz-hint">Drop your original document here<br>or click to browse</div>
+          <div class="dz-filename hidden" id="fn-old"></div>
+          <div class="format-row">
+            <span class="fmt">TXT</span><span class="fmt">MD</span><span class="fmt">DOCX</span>
+            <span class="fmt">PDF</span><span class="fmt">XLSX</span><span class="fmt">CSV</span><span class="fmt">HTML</span>
+          </div>
+          <input type="file" id="fi-old" style="display:none" accept=".txt,.md,.csv,.html,.htm,.json,.tsv,.pdf,.docx,.xlsx,.xls,.pptx">
+        </div>
+        <div class="up-arrow"><i class="ti ti-arrow-right" style="font-size:20px" aria-hidden="true"></i></div>
+        <div class="dropzone dz-new" id="dz-new" tabindex="0" role="button">
+          <div class="dz-icon"><i class="ti ti-file-text" style="color:var(--green);font-size:20px" aria-hidden="true"></i></div>
+          <div class="dz-title">New version</div>
+          <div class="dz-hint">Drop the updated document here<br>or click to browse</div>
+          <div class="dz-filename hidden" id="fn-new"></div>
+          <div class="format-row">
+            <span class="fmt">TXT</span><span class="fmt">MD</span><span class="fmt">DOCX</span>
+            <span class="fmt">PDF</span><span class="fmt">XLSX</span><span class="fmt">CSV</span><span class="fmt">HTML</span>
+          </div>
+          <input type="file" id="fi-new" style="display:none" accept=".txt,.md,.csv,.html,.htm,.json,.tsv,.pdf,.docx,.xlsx,.xls,.pptx">
+        </div>
+      </div>
+      <div class="config-card">
+        <div style="display:flex;gap:32px;flex-wrap:wrap">
+          <div>
+            <div class="config-title">Sensitivity</div>
+            <div class="chip-row">
+              <div class="chip on" data-grp="sens">Balanced</div>
+              <div class="chip" data-grp="sens">Strict</div>
+              <div class="chip" data-grp="sens">Semantic</div>
+            </div>
+          </div>
+          <div>
+            <div class="config-title">Watch for</div>
+            <div class="chip-row">
+              <div class="chip on" data-grp="watch">Financial</div>
+              <div class="chip on" data-grp="watch">Dates</div>
+              <div class="chip" data-grp="watch">Legal terms</div>
+              <div class="chip" data-grp="watch">Names</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="up-actions">
+        <span class="err-msg hidden" id="err-msg"></span>
+        <button class="cmp-btn" id="btn-compare" disabled>
+          <i class="ti ti-git-compare" style="font-size:14px" aria-hidden="true"></i>
+          Compare documents
+        </button>
+      </div>
+    </div>
+
+    <!-- PROGRESS -->
+    <div id="page-progress" class="hidden">
+      <div class="prog-wrap">
+        <div class="prog-icon-wrap">
+          <span class="spin" id="prog-ico"><i class="ti ti-loader" style="font-size:36px;color:var(--blue)" aria-hidden="true"></i></span>
+        </div>
+        <div class="prog-title" id="prog-title">Processing</div>
+        <div class="prog-sub" id="prog-sub">Preparing…</div>
+        <div class="prog-track"><div class="prog-fill" id="prog-bar" style="width:0%"></div></div>
+        <div class="prog-pct" id="prog-pct">0%</div>
+        <div class="prog-detail" id="prog-detail"></div>
+        <div class="prog-page-track" id="prog-page-track" style="display:none"><div class="prog-page-fill" id="prog-page-bar" style="width:0%"></div></div>
+        <div class="stage-list" id="stage-list"></div>
+      </div>
+    </div>
+
+    <!-- VIEWER -->
+    <div id="page-viewer" class="hidden">
+      <div id="changes-panel">
+        <div class="cp-header">
+          <div class="cp-top">
+            <span class="cp-name" id="cp-name">Comparison</span>
+            <span class="total-pill" id="total-pill">0</span>
+          </div>
+          <div class="stat-grid">
+            <div class="sc sc-add"><div class="sv" id="s-add">0</div><div class="sl">Added</div></div>
+            <div class="sc sc-del"><div class="sv" id="s-del">0</div><div class="sl">Deleted</div></div>
+            <div class="sc sc-mod"><div class="sv" id="s-mod">0</div><div class="sl">Modified</div></div>
+            <div class="sc sc-mov"><div class="sv" id="s-mov">0</div><div class="sl">Moved</div></div>
+          </div>
+          <div class="meta-row" id="meta-row"></div>
+        </div>
+        <div class="cp-search">
+          <input class="search-inp" id="search-inp" type="text" placeholder="Search changes…">
+          <div class="filter-row" id="filter-row"></div>
+        </div>
+        <div class="change-list" id="change-list"></div>
+        <div class="cp-nav">
+          <button class="nbtn" id="btn-prev"><i class="ti ti-arrow-up" style="font-size:11px" aria-hidden="true"></i> Prev</button>
+          <button class="nbtn" id="btn-next">Next <i class="ti ti-arrow-down" style="font-size:11px" aria-hidden="true"></i></button>
+        </div>
+      </div>
+
+      <div id="doc-area">
+        <div class="doc-toolbar">
+          <span class="dt-label">Side-by-side comparison</span>
+          <div class="legend">
+            <div class="leg"><div class="leg-dot" style="background:var(--green)"></div>Added</div>
+            <div class="leg"><div class="leg-dot" style="background:var(--red)"></div>Deleted</div>
+            <div class="leg"><div class="leg-dot" style="background:var(--amber)"></div>Modified</div>
+            <div class="leg"><div class="leg-dot" style="background:var(--purple)"></div>Moved</div>
+          </div>
+          <button class="btn" id="btn-back" style="margin-left:8px">
+            <i class="ti ti-plus" style="font-size:11px" aria-hidden="true"></i> New comparison
+          </button>
+        </div>
+        <div class="doc-panes">
+          <div class="pane">
+            <div class="pane-hd">
+              <div class="pane-dot" style="background:var(--red)"></div>
+              <span class="pane-name" id="pane-old-name">Old version</span>
+              <span class="pane-badge" style="background:var(--red-bg);color:var(--red);border:1px solid var(--red-bd)">Original</span>
+            </div>
+            <div class="pane-body" id="pane-old"></div>
+          </div>
+          <div class="pane">
+            <div class="pane-hd">
+              <div class="pane-dot" style="background:var(--green)"></div>
+              <span class="pane-name" id="pane-new-name">New version</span>
+              <span class="pane-badge" style="background:var(--green-bg);color:var(--green);border:1px solid var(--green-bd)">Updated</span>
+            </div>
+            <div class="pane-body" id="pane-new"></div>
+          </div>
+        </div>
+        <div id="detail">
+          <div class="detail-empty"><i class="ti ti-hand-click" style="font-size:15px" aria-hidden="true"></i> Select a change to see details</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+// ── Text normalisation / block model ──────────────────────────
+// A "block" is a paragraph-like unit: {words:[{t,k,bx:[[x0,y0,x1,y1]],p,conf}], text, key, dg, ocr, page}
+// Box coordinates are fractions (0..1) of the page, so overlays scale with any render size.
+const normWord=w=>w.normalize('NFKC').toLowerCase().replace(/[\u2018\u2019`\u00b4]/g,"'").replace(/[\u2010-\u2015]/g,'-')
+  .replace(/^[^\p{L}\p{N}\u20b9$%]+|[^\p{L}\p{N}\u20b9$%]+$/gu,'').replace(/(?<=\p{L})-(?=\p{L})/gu,'');
+const digs=s=>(s.match(/\d+/g)||[]).join(',');
+function dice(a,b){
+  if(a===b)return 1;if(a.length<2||b.length<2)return 0;
+  const m=new Map();for(let i=0;i<a.length-1;i++){const g=a.substr(i,2);m.set(g,(m.get(g)||0)+1);}
+  let n=0;for(let i=0;i<b.length-1;i++){const g=b.substr(i,2),c=m.get(g);if(c>0){m.set(g,c-1);n++;}}
+  return 2*n/(a.length+b.length-2);
+}
+// Words are equal if identical after normalisation; for OCR'd docs, near-identical non-numeric words
+// are treated as equal (recognition noise). Numbers are ALWAYS compared strictly.
+function wordEq(a,b,ocr){
+  if(a===b)return true;
+  if(!ocr||a.length<4||b.length<4||/\d/.test(a+b))return false;
+  return dice(a,b)>=0.8;
+}
+function mkBlock(words,ocr,page){
+  const ws=[];
+  for(const w of words){const k=normWord(w.t);if(!k)continue;ws.push({t:w.t,k,bx:w.bx||null,p:w.p!==undefined?w.p:page,conf:w.conf});}
+  if(!ws.length)return null;
+  const key=ws.map(w=>w.k).join(' ');
+  return{words:ws,text:ws.map(w=>w.t).join(' '),key,dg:digs(key),ocr:!!ocr,page};
+}
+function blockEq(a,b,ocr){
+  if(a.key===b.key)return true;
+  if(!ocr||a.dg!==b.dg||a.words.length!==b.words.length)return false;
+  const la=a.key.length,lb=b.key.length;
+  if(Math.abs(la-lb)>Math.max(3,.1*Math.max(la,lb)))return false;
+  for(let i=0;i<a.words.length;i++)if(!wordEq(a.words[i].k,b.words[i].k,true))return false;
+  return true;
+}
+function splitSents(t){return t.replace(/\r\n/g,'\n').split('\n').map(s=>s.trim()).filter(Boolean);}
+function textToBlocks(t){
+  return splitSents(t).map(s=>mkBlock(s.split(/\s+/).filter(Boolean).map(x=>({t:x})),false,null)).filter(Boolean);
+}
+// Convert HTML to text with one line per block element (innerText on a detached node collapses paragraphs).
+function htmlToText(html){
+  const doc=new DOMParser().parseFromString(html,'text/html');
+  doc.querySelectorAll('script,style,noscript,template').forEach(e=>e.remove());
+  const BLK='h1,h2,h3,h4,h5,h6,p,li,tr,pre,blockquote,div,dt,dd,caption,figcaption';
+  const lines=[];
+  doc.body.querySelectorAll(BLK).forEach(el=>{
+    if(el.tagName==='TR'){lines.push([...el.children].map(c=>c.textContent.replace(/\s+/g,' ').trim()).join('\t'));return;}
+    if(el.closest('tr'))return;
+    if(el.querySelector(BLK))return;
+    lines.push(el.textContent.replace(/\s+/g,' ').trim());
+  });
+  if(!lines.some(Boolean))return doc.body.textContent||'';
+  return lines.filter(Boolean).join('\n');
+}
+
+// ── Line → block grouping (shared by native PDF text and OCR) ─
+function linesToBlocks(lines,ocr,p){
+  const blocks=[];let cur=[],prev=null;
+  const maxW=Math.max(0.01,...lines.map(l=>l.x1-l.x0));
+  // typical line pitch on this page: paragraph breaks are gaps clearly larger than the median pitch
+  const pitches=[];for(let i=1;i<lines.length;i++){const d=lines[i].cy-lines[i-1].cy;if(d>0)pitches.push(d);}
+  pitches.sort((a,b)=>a-b);
+  const med=pitches.length>=3?pitches[Math.floor(pitches.length/2)]:0;
+  const flush=()=>{if(cur.length){const b=mkBlock(cur,ocr,p);if(b)blocks.push(b);}cur=[];};
+  for(const l of lines){
+    if(prev){
+      const gap=l.cy-prev.cy,last=prev.words[prev.words.length-1].t;
+      const endsSent=/[.:;!?]["')\]]?$/.test(last),short=(prev.x1-prev.x0)<0.72*maxW;
+      const bigGap=med?gap>1.3*med:gap>1.6*Math.max(l.h,prev.h);
+      if(bigGap||gap<-0.5*l.h||(endsSent&&short))flush();
+    }
+    const ws=l.words.map(w=>({t:w.t,bx:[w.box],conf:w.conf}));
+    // de-hyphenate words broken across lines (union of both boxes so highlights cover both halves)
+    if(cur.length&&prev&&ws.length&&/\p{L}{2,}-$/u.test(cur[cur.length-1].t)&&/^\p{Ll}/u.test(ws[0].t)){
+      const lw=cur[cur.length-1],f=ws.shift();
+      lw.t=lw.t.slice(0,-1)+f.t;lw.bx=lw.bx.concat(f.bx);
+    }
+    cur.push(...ws);prev=l;
+  }
+  flush();return blocks;
+}
+function nativeLines(items,vp){
+  const toks=[];
+  for(const it of items){
+    const tx=it.transform,fh=Math.hypot(tx[2],tx[3])||10,w=it.width||0,n=it.str.length||1;
+    for(const m of it.str.matchAll(/\S+/g)){
+      const xa=tx[4]+w*m.index/n,xb=tx[4]+w*(m.index+m[0].length)/n;
+      const[X0,Y0]=vp.convertToViewportPoint(xa,tx[5]),[X1]=vp.convertToViewportPoint(xb,tx[5]);
+      const fs=fh*vp.scale;
+      toks.push({t:m[0],box:[Math.min(X0,X1)/vp.width,(Y0-fs*.85)/vp.height,Math.max(X0,X1)/vp.width,(Y0+fs*.25)/vp.height],cy:Y0/vp.height,h:fs/vp.height});
+    }
+  }
+  const lines=[];let cur=null;
+  for(const t of toks){
+    if(cur&&Math.abs(t.cy-cur.cy)<0.6*cur.h)cur.words.push(t);
+    else{cur={cy:t.cy,h:t.h,words:[t]};lines.push(cur);}
+  }
+  lines.forEach(l=>{l.words.sort((a,b)=>a.box[0]-b.box[0]);l.x0=l.words[0].box[0];l.x1=Math.max(...l.words.map(w=>w.box[2]));});
+  return lines;
+}
+function ocrLines(data,cw,chh){
+  const lines=[];
+  for(const L of (data.lines||[])){
+    const ws=(L.words||[]).filter(w=>w.text&&w.text.trim()&&!(w.text.trim().length<=2&&w.confidence<40&&!/[A-Za-z0-9]/.test(w.text)));
+    if(!ws.length)continue;
+    const words=ws.map(w=>({t:w.text.trim(),box:[w.bbox.x0/cw,w.bbox.y0/chh,w.bbox.x1/cw,w.bbox.y1/chh],conf:w.confidence}));
+    lines.push({words,cy:(L.bbox.y0+L.bbox.y1)/2/chh,h:(L.bbox.y1-L.bbox.y0)/chh,x0:L.bbox.x0/cw,x1:L.bbox.x1/cw});
+  }
+  return lines;
+}
+// Grayscale + percentile contrast stretch: evens out grey/yellowed scans before recognition.
+function enhance(cv){
+  const c=cv.getContext('2d'),d=c.getImageData(0,0,cv.width,cv.height),a=d.data,hist=new Uint32Array(256);
+  for(let i=0;i<a.length;i+=4){const g=(a[i]*.299+a[i+1]*.587+a[i+2]*.114)|0;a[i]=a[i+1]=a[i+2]=g;hist[g]++;}
+  const tot=a.length/4;let lo=0,hi=255,s=0;
+  for(;lo<254&&(s+=hist[lo])<tot*.01;lo++);s=0;for(;hi>1&&(s+=hist[hi])<tot*.01;hi--);
+  const r=Math.max(1,hi-lo);
+  for(let i=0;i<a.length;i+=4){const v=Math.max(0,Math.min(255,((a[i]-lo)*255/r)|0));a[i]=a[i+1]=a[i+2]=v;}
+  c.putImageData(d,0,0);
+}
+
+// ── File reading helpers ───────────────────────────────────────
+function readBuf(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsArrayBuffer(file);});}
+function readTxt(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsText(file);});}
+let OCR_WORKER=null;
+async function getOcr(){
+  if(!window.Tesseract)throw new Error('OCR engine (Tesseract) could not be loaded. Check your connection and retry.');
+  if(!OCR_WORKER){
+    OCR_WORKER=await Tesseract.createWorker('eng',1,{logger:()=>{}});
+    // PSM 3 (automatic layout) keeps large isolated headings that the default mode drops; DPI hint stops resolution guessing
+    await OCR_WORKER.setParameters({tessedit_pageseg_mode:'3',user_defined_dpi:'300'});
+  }
+  return OCR_WORKER;
+}
+async function stopOcr(){if(OCR_WORKER){try{await OCR_WORKER.terminate();}catch(e){}OCR_WORKER=null;}}
+async function loadPdfJs(){
+  if(window.pdfjsLib)return;
+  await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';s.onload=res;s.onerror=()=>rej(new Error('Could not load PDF engine'));document.head.appendChild(s);});
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+async function extractPdf(file){
+  await loadPdfJs();
+  const buf=await readBuf(file);
+  const pdfDoc=await window.pdfjsLib.getDocument({data:new Uint8Array(buf.slice(0))}).promise;
+  const pageCount=pdfDoc.numPages,blocks=[],pages=[];let ocrPages=0;
+  const detail=$('prog-detail'),track=$('prog-page-track'),bar=$('prog-page-bar');
+  if(track)track.style.display='block';
+  for(let p=1;p<=pageCount;p++){
+    await new Promise(r=>setTimeout(r,0));
+    if(bar)bar.style.width=Math.round((p-1)/pageCount*100)+'%';
+    if(detail)detail.textContent=`${file.name} — page ${p} of ${pageCount}`;
+    const page=await pdfDoc.getPage(p),vp=page.getViewport({scale:1});
+    const tc=await page.getTextContent();
+    const items=tc.items.filter(i=>i.str&&i.str.trim());
+    const nChars=items.reduce((n,i)=>n+i.str.trim().length,0);
+    let pb=[],usedOcr=false;
+    if(nChars>=30){
+      pb=linesToBlocks(nativeLines(items,vp),false,p-1);
+    }else{
+      usedOcr=true;ocrPages++;
+      if(detail)detail.innerHTML=`${esc(file.name)} — page ${p} of ${pageCount} <span class="ocr-badge"><i class="ti ti-eye"></i> OCR</span>`;
+      const scale=Math.min(4,Math.max(2,2400/vp.width)),v=page.getViewport({scale});
+      const cv=document.createElement('canvas');cv.width=Math.round(v.width);cv.height=Math.round(v.height);
+      await page.render({canvasContext:cv.getContext('2d'),viewport:v}).promise;
+      enhance(cv);
+      const w=await getOcr(),r=await w.recognize(cv);
+      pb=linesToBlocks(ocrLines(r.data,cv.width,cv.height),true,p-1);
+      cv.width=cv.height=0;
+      if(!pb.length&&nChars)pb=linesToBlocks(nativeLines(items,vp),false,p-1);
+    }
+    pages.push({w:vp.width,h:vp.height,ocr:usedOcr});
+    blocks.push(...pb);
+  }
+  if(bar)bar.style.width='100%';
+  if(detail)detail.innerHTML=ocrPages?`Extracted ${pageCount} pages <span class="ocr-badge"><i class="ti ti-eye"></i> OCR used on ${ocrPages} page${ocrPages>1?'s':''}</span>`:`Extracted ${pageCount} pages (native text layer)`;
+  const text=blocks.map(b=>b.text).join('\n');
+  return{type:'pdf',text,html:null,pdfDoc,pageCount,pages,blocks,ocrPageCount:ocrPages};
+}
+async function extractPptx(buf){
+  if(!window.JSZip)throw new Error('PPTX reader failed to load');
+  const zip=await JSZip.loadAsync(buf);
+  const names=Object.keys(zip.files).filter(n=>/^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a,b)=>parseInt(a.match(/\d+/)[0])-parseInt(b.match(/\d+/)[0]));
+  const out=[];
+  for(const n of names){
+    const xml=await zip.files[n].async('string');
+    const doc=new DOMParser().parseFromString(xml,'application/xml');
+    const paras=[...doc.getElementsByTagName('a:p')].map(p=>[...p.getElementsByTagName('a:t')].map(t=>t.textContent).join('')).filter(s=>s.trim());
+    out.push(`Slide ${n.match(/\d+/)[0]}`,...paras);
+  }
+  return out.join('\n');
+}
+async function extract(file){
+  const ext=file.name.split('.').pop().toLowerCase();
+  if(ext==='pdf'){
+    try{return await extractPdf(file);}
+    catch(e){throw new Error(`${file.name}: ${e.message}`);}
+  }
+  if(['txt','md','json','log'].includes(ext)){
+    let text=await readTxt(file);
+    if(ext==='json'){try{text=JSON.stringify(JSON.parse(text),null,2);}catch(e){}}
+    return{type:'text',text,html:null,blocks:textToBlocks(text)};
+  }
+  if(ext==='csv'||ext==='tsv'){
+    const raw=await readTxt(file);
+    const wb=XLSX.read(raw,{type:'string',FS:ext==='tsv'?'\t':undefined,raw:true});
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false});
+    const rowLines=rows.map(r=>r.map(c=>String(c).replace(/\s+/g,' ').trim()).join('\t'));
+    const blocks=[],rowOf=[];
+    rowLines.forEach((l,ri)=>{const b=mkBlock(l.split(/[\t ]+/).filter(Boolean).map(t=>({t})),false,null);if(b){blocks.push(b);rowOf.push(ri);}});
+    return{type:'csv',text:rowLines.join('\n'),rows,html:null,blocks,rowOf};
+  }
+  if(['html','htm'].includes(ext)){
+    const raw=await readTxt(file),text=htmlToText(raw);
+    return{type:'html',text,html:raw,blocks:textToBlocks(text)};
+  }
+  if(ext==='docx'){
+    try{
+      const res=await mammoth.convertToHtml({arrayBuffer:await readBuf(file)});
+      const text=htmlToText(res.value);
+      return{type:'docx',text,html:res.value,blocks:textToBlocks(text)};
+    }catch(e){throw new Error(`${file.name}: could not read DOCX (${e.message})`);}
+  }
+  if(ext==='pptx'){
+    try{const text=await extractPptx(await readBuf(file));return{type:'text',text,html:null,blocks:textToBlocks(text)};}
+    catch(e){throw new Error(`${file.name}: could not read PPTX (${e.message})`);}
+  }
+  if(['xlsx','xls','xlsm','ods'].includes(ext)){
+    try{
+      const wb=XLSX.read(await readBuf(file),{type:'array'});
+      let allText='';const sheets={};
+      wb.SheetNames.forEach(name=>{
+        const rows=XLSX.utils.sheet_to_json(wb.Sheets[name],{header:1,defval:'',raw:false});
+        sheets[name]=rows;rows.forEach(row=>{allText+=row.join('\t')+'\n';});
+      });
+      return{type:'xlsx',text:allText,sheets,sheetNames:wb.SheetNames,html:null,blocks:[]};
+    }catch(e){throw new Error(`${file.name}: could not read spreadsheet (${e.message})`);}
+  }
+  if(['doc','ppt','rtf','odt'].includes(ext))throw new Error(`${file.name}: .${ext} is not supported — save it as DOCX/PPTX/PDF first.`);
+  const text=await readTxt(file);
+  return{type:'text',text,html:null,blocks:textToBlocks(text)};
+}
+
+// ── Diff helpers ──────────────────────────────────────────────
+function tokenize(t){return t.split(/(\s+|[^\w\s]+)/).filter(x=>x.length);}
+function jaccard(a,b){
+  const sa=new Set(a.toLowerCase().split(/\s+/)),sb=new Set(b.toLowerCase().split(/\s+/));
+  const n=[...sa].filter(x=>sb.has(x)).length,d=new Set([...sa,...sb]).size;
+  return d?n/d:1;
+}
+function lcs(a,b){return lcsEq(a,b,(x,y)=>x===y);}
+function lcsEq(a,b,eq){
+  const m=a.length,n=b.length;if(!m||!n)return[];
+  const dp=new Array(m+1);for(let i=0;i<=m;i++)dp[i]=new Int32Array(n+1);
+  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)dp[i][j]=eq(a[i-1],b[j-1])?dp[i-1][j-1]+1:Math.max(dp[i-1][j],dp[i][j-1]);
+  const r=[];let i=m,j=n;
+  while(i>0&&j>0){
+    if(eq(a[i-1],b[j-1])){r.push([i-1,j-1]);i--;j--;}
+    else if(dp[i-1][j]>=dp[i][j-1])i--;else j--;
+  }
+  return r.reverse();
+}
+const LCS_CAP=2.2e7;
+function coarseAlign(A,B,eq){
+  const out=[],W=1500;let i0=0,j0=0;
+  while(i0<A.length&&j0<B.length){
+    const ie=Math.min(A.length,i0+W),je=Math.min(B.length,j0+W),last=ie>=A.length||je>=B.length;
+    const r=lcsEq(A.slice(i0,ie),B.slice(j0,je),eq);
+    if(!r.length){i0=ie;j0=je;continue;}
+    const keep=last?r:r.slice(0,Math.max(1,Math.floor(r.length*.8)));
+    keep.forEach(([i,j])=>out.push([i+i0,j+j0]));
+    const[li,lj]=keep[keep.length-1];i0+=li+1;j0+=lj+1;
+  }
+  return out;
+}
+function align(a,b,eq){
+  let s=0;while(s<a.length&&s<b.length&&eq(a[s],b[s]))s++;
+  let ea=a.length,eb=b.length;while(ea>s&&eb>s&&eq(a[ea-1],b[eb-1])){ea--;eb--;}
+  const res=[];for(let i=0;i<s;i++)res.push([i,i]);
+  const A=a.slice(s,ea),B=b.slice(s,eb);
+  const mid=(A.length+1)*(B.length+1)<=LCS_CAP?lcsEq(A,B,eq):coarseAlign(A,B,eq);
+  mid.forEach(([i,j])=>res.push([i+s,j+s]));
+  for(let k=0;k<a.length-ea;k++)res.push([ea+k,eb+k]);
+  return res;
+}
+function inlineDiff(o,n,side){
+  if(!o&&!n)return '';
+  const useChar=(o+n).length<80;
+  const ot=useChar?[...(o||'')]:tokenize(o||''),nt=useChar?[...(n||'')]:tokenize(n||'');
+  const L=lcs(ot,nt),lo=new Set(L.map(([a])=>a)),ln=new Set(L.map(([,b])=>b));
+  let h='';
+  if(side==='old')ot.forEach((t,i)=>h+=lo.has(i)?esc(t):`<mark class="rm">${esc(t)}</mark>`);
+  else nt.forEach((t,i)=>h+=ln.has(i)?esc(t):`<mark class="ad">${esc(t)}</mark>`);
+  return h;
+}
+function classify(o,n){
+  const numRe=/[\$\u20b9\u00a3\u20ac]?\s*[\d,]+(?:\.\d+)?(?:\s*(?:lakh|crore|million|billion|k|%|days?|months?|years?))?/gi;
+  const dateRe=/\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b|\b\d{4}[\/\-]\d{2}[\/\-]\d{2}\b/gi;
+  const fin=/payment|price|cost|fee|penalty|liability|value|amount|contract|revenue|salary|bonus|rate/i;
+  const leg=/\b(shall|must|may not|obligation|terminat\w*|notice|indemnif\w*|warrant\w*|liable|breach|default|exclusive|governing|jurisdiction|confidential\w*)\b/i;
+  const cats=[];
+  if((o.match(numRe)||[]).join()!==(n.match(numRe)||[]).join())cats.push('numeric');
+  if((o.match(dateRe)||[]).join()!==(n.match(dateRe)||[]).join())cats.push('date');
+  if(fin.test(o)||fin.test(n))cats.push('financial');
+  if(leg.test(o)||leg.test(n))cats.push('legal');
+  const sim=jaccard(o,n);
+  let sev='low';
+  if(cats.includes('numeric')||cats.includes('date'))sev='medium';
+  if(sim<0.35)sev='high';
+  if(cats.includes('financial')&&cats.includes('numeric'))sev='high';
+  if(sim<0.1)sev='critical';
+  return{cats,sev,sim:Math.round(sim*100)};
+}
+// Severity from what actually changed (hunk words) + the surrounding context.
+function classifyChange(rm,add,ot,nt,type){
+  const h=classify(rm,add),c=classify(ot,nt);
+  const cats=[...new Set([...h.cats.filter(x=>x==='numeric'||x==='date'),...c.cats.filter(x=>x==='financial'||x==='legal')])];
+  const legalHit=/\b(shall|must|may|not|no|terminat\w*|indemnif\w*|liable|breach|exclusive|penalty)\b/i.test(rm+' '+add);
+  let sev='low';
+  if(cats.includes('numeric')||cats.includes('date'))sev='medium';
+  if(type==='added'||type==='deleted')sev='medium';
+  if((rm+' '+add).trim().split(/\s+/).length>=25)sev='medium';
+  if(legalHit&&cats.includes('legal'))sev='high';
+  if(cats.includes('financial')&&cats.includes('numeric'))sev='high';
+  if((type==='added'||type==='deleted')&&((cats.includes('financial')&&cats.includes('numeric'))||cats.includes('legal')))sev='critical';
+  if(type==='moved')sev='low';
+  return{cats,sev,sim:Math.round(jaccard(ot,nt)*100)};
+}
+
+// ── Core diff: block anchoring → word-level hunks in the gaps ──
+function diffBlocks(ob,nb){
+  const ocr=ob.some(b=>b.ocr)||nb.some(b=>b.ocr);
+  const anchors=align(ob,nb,(x,y)=>blockEq(x,y,ocr));
+  const out=[];let po=0,pn=0;
+  for(const[i,j]of[...anchors,[ob.length,nb.length]]){
+    if(i>po||j>pn)gapChanges(po,i,pn,j,ob,nb,ocr,out,false);
+    po=i+1;pn=j+1;
+  }
+  // moved: identical text deleted in one place and added in another
+  const addedByKey=new Map();
+  out.forEach((c,ix)=>{if(c.type==='added'&&c.addWords.length>=5)addedByKey.set(c.addWords.map(w=>w.k).join(' '),ix);});
+  const drop=new Set();
+  out.forEach(c=>{
+    if(c.type!=='deleted'||c.rmWords.length<5)return;
+    const k=c.rmWords.map(w=>w.k).join(' '),ix=addedByKey.get(k);
+    if(ix===undefined||drop.has(ix))return;
+    const a=out[ix];drop.add(ix);
+    Object.assign(c,{type:'moved',newIdxs:a.newIdxs,newIdx:a.newIdx,newText:a.newText,addText:a.addText,addWords:a.addWords,newBoxes:a.newBoxes,newAnchor:a.newAnchor,sev:'low'});
+  });
+  const res=out.filter((_,ix)=>!drop.has(ix));
+  res.forEach((c,ix)=>c.id=ix+1);
+  return res;
+}
+function gapChanges(o0,o1,n0,n1,ob,nb,ocr,out,small){
+  const ow=[],nw=[];
+  for(let i=o0;i<o1;i++)ob[i].words.forEach(w=>ow.push({w,bi:i}));
+  for(let j=n0;j<n1;j++)nb[j].words.forEach(w=>nw.push({w,bi:j}));
+  if((ow.length+1)*(nw.length+1)>LCS_CAP){
+    if(small){ // give up on pairing: whole blocks are deleted/added
+      for(let i=o0;i<o1;i++)emit(ob[i].words.map(w=>({w,bi:i})),[],[i],[],o0,n0,ob,nb,ocr,out,new Map(),new Map());
+      for(let j=n0;j<n1;j++)emit([],nb[j].words.map(w=>({w,bi:j})),[],[j],o0,n0,ob,nb,ocr,out,new Map(),new Map());
+      return;
+    }
+    // very large gap: pair blocks greedily in order, then diff each pair
+    let ptr=n0,pi=o0,pj=n0;
+    const bj=(i)=>{let best=-1,bs=.4;for(let j=ptr;j<n1;j++){const s=jaccard(ob[i].key,nb[j].key);if(s>bs){bs=s;best=j;}}return best;};
+    for(let i=o0;i<o1;i++){
+      const j=bj(i);if(j<0)continue;
+      if(i>pi||j>pj)gapChanges(pi,i,pj,j,ob,nb,ocr,out,true);
+      gapChanges(i,i+1,j,j+1,ob,nb,ocr,out,true);
+      pi=i+1;pj=j+1;ptr=j+1;
+    }
+    if(o1>pi||n1>pj)gapChanges(pi,o1,pj,n1,ob,nb,ocr,out,true);
+    return;
+  }
+  const L=lcsEq(ow,nw,(x,y)=>wordEq(x.w.k,y.w.k,ocr));
+  const nbToOb=new Map(),obToNb=new Map();
+  L.forEach(([a,b])=>{nbToOb.set(nw[b].bi,ow[a].bi);obToNb.set(ow[a].bi,nw[b].bi);});
+  const hunks=[];let a=0,b=0;
+  for(const[ia,ib]of[...L,[ow.length,nw.length]]){
+    if(ia>a||ib>b){
+      const l=hunks[hunks.length-1];
+      if(l&&a-l.a1===1&&b-l.b1===1){l.a1=ia;l.b1=ib;}else hunks.push({a0:a,a1:ia,b0:b,b1:ib});
+    }
+    a=ia+1;b=ib+1;
+  }
+  for(const h of hunks){
+    const oW=ow.slice(h.a0,h.a1),nW=nw.slice(h.b0,h.b1);
+    if(oW.length&&nW.length)emit(oW,nW,null,null,o0,n0,ob,nb,ocr,out,nbToOb,obToNb);
+    else{ // one-sided: split per block so each deleted/added paragraph is its own change
+      const src=oW.length?oW:nW,groups=new Map();
+      src.forEach(x=>{if(!groups.has(x.bi))groups.set(x.bi,[]);groups.get(x.bi).push(x);});
+      groups.forEach(g=>oW.length?emit(g,[],null,null,o0,n0,ob,nb,ocr,out,nbToOb,obToNb):emit([],g,null,null,o0,n0,ob,nb,ocr,out,nbToOb,obToNb));
+    }
+  }
+}
+const uniq=a=>[...new Set(a)].sort((x,y)=>x-y);
+function boxesOf(ws){const r=[];ws.forEach(w=>{if(w.bx)w.bx.forEach(b=>r.push({p:w.p,b}));});return r;}
+function anchorOf(blocks,idxs,fallbackIdx){
+  const i=idxs.length?idxs[0]:Math.max(0,Math.min(blocks.length-1,fallbackIdx));
+  const w=blocks[i]&&blocks[i].words[0];
+  return w&&w.bx?{p:w.p,b:w.bx[0]}:null;
+}
+function emit(oW,nW,forceO,forceN,o0,n0,ob,nb,ocr,out,nbToOb,obToNb){
+  let oIdx=forceO||uniq(oW.map(x=>x.bi)),nIdx=forceN||uniq(nW.map(x=>x.bi));
+  if(!oIdx.length)oIdx=uniq(nIdx.map(j=>nbToOb.get(j)).filter(v=>v!==undefined));
+  if(!nIdx.length)nIdx=uniq(oIdx.map(i=>obToNb.get(i)).filter(v=>v!==undefined));
+  // partner blocks (same paragraph on the other side) make an in-paragraph edit a "modified", not add/delete
+  const rmWords=oW.map(x=>x.w),addWords=nW.map(x=>x.w);
+  const type=(oW.length&&nW.length)||(oIdx.length&&nIdx.length)?'modified':oW.length?'deleted':'added';
+  const oldText=oIdx.map(i=>ob[i].text).join(' ').slice(0,1500),newText=nIdx.map(j=>nb[j].text).join(' ').slice(0,1500);
+  const rmText=rmWords.map(w=>w.t).join(' '),addText=addWords.map(w=>w.t).join(' ');
+  const cl=classifyChange(rmText,addText,type==='added'?'':oldText,type==='deleted'?'':newText,type);
+  const confs=[...rmWords,...addWords].map(w=>w.conf).filter(c=>typeof c==='number');
+  const isOcr=[...oIdx.map(i=>ob[i]),...nIdx.map(j=>nb[j])].some(b=>b.ocr);
+  const conf=confs.length?Math.round(Math.min(...confs)):null;
+  if(isOcr&&type==='modified'&&conf!==null&&conf<70&&!cl.cats.includes('numeric'))cl.cats.push('verify');
+  out.push({id:0,type,oldText,newText,rmText,addText,rmWords,addWords,...cl,
+    oldIdxs:oIdx,newIdxs:nIdx,oldIdx:oIdx.length?oIdx[0]:-1,newIdx:nIdx.length?nIdx[0]:-1,
+    oldBoxes:boxesOf(rmWords),newBoxes:boxesOf(addWords),
+    oldAnchor:anchorOf(ob,oIdx,o0),newAnchor:anchorOf(nb,nIdx,n0),
+    page:(oW[0]||nW[0]||{w:{}}).w.p,ocr:isOcr,conf});
+}
+function diffTexts(ot,nt){return diffBlocks(textToBlocks(ot),textToBlocks(nt));}
+
+// ── XLSX cell-level diff ──────────────────────────────────────
+function diffXlsx(oldC,newC){
+  const changes=[];let id=1;
+  const oldSheets=oldC.sheets||{},newSheets=newC.sheets||{};
+  new Set([...Object.keys(oldSheets),...Object.keys(newSheets)]).forEach(sheet=>{
+    const oRows=oldSheets[sheet]||[],nRows=newSheets[sheet]||[],maxR=Math.max(oRows.length,nRows.length);
+    for(let r=0;r<maxR;r++){
+      const oRow=oRows[r]||[],nRow=nRows[r]||[],maxC=Math.max(oRow.length,nRow.length);
+      for(let c=0;c<maxC;c++){
+        const ov=String(oRow[c]??'').trim(),nv=String(nRow[c]??'').trim();
+        if(ov===nv)continue;
+        const type=!ov?'added':!nv?'deleted':'modified',cl=classifyChange(ov,nv,ov,nv,type);
+        changes.push({id:id++,type,oldText:ov,newText:nv,oldIdx:r,newIdx:r,oldIdxs:[r],newIdxs:[r],sheet,row:r,col:c,cellRef:colLetter(c)+(r+1),...cl,rmText:ov,addText:nv});
+      }
+    }
+  });
+  return changes;
+}
+function colLetter(n){let r='';n++;while(n>0){r=String.fromCharCode(65+(n-1)%26)+r;n=Math.floor((n-1)/26);}return r;}
+
+
+// ── State ─────────────────────────────────────────────────────
+const S={oldFile:null,newFile:null,oldContent:null,newContent:null,
+  oldText:'',newText:'',changes:[],active:null,filtered:[],filter:'all',search:''};
+
+// ── Page switching ─────────────────────────────────────────────
+function showPage(p){
+  ['upload','progress','viewer'].forEach(id=>{
+    $('page-'+id).classList.toggle('hidden',id!==p);
+  });
+  $('btn-new').classList.toggle('hidden',p!=='viewer');
+  $('btn-export').classList.toggle('hidden',p!=='viewer');
+}
+
+// ── Drop zones ─────────────────────────────────────────────────
+function setupDZ(dzId,fiId,fnId,key){
+  const dz=$(dzId),fi=$(fiId),fn=$(fnId);
+  dz.addEventListener('click',()=>fi.click());
+  dz.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' ')fi.click();});
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag');});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');attach(e.dataTransfer.files[0],key,fn,dz);});
+  fi.addEventListener('change',()=>attach(fi.files[0],key,fn,dz));
+}
+function attach(f,key,fnEl,dz){
+  if(!f)return;
+  S[key]=f;
+  fnEl.textContent=f.name+' · '+(f.size/1024).toFixed(1)+' KB';
+  fnEl.classList.remove('hidden');
+  dz.classList.add('filled');
+  $('btn-compare').disabled=!(S.oldFile&&S.newFile);
+  $('err-msg').classList.add('hidden');
+}
+setupDZ('dz-old','fi-old','fn-old','oldFile');
+setupDZ('dz-new','fi-new','fn-new','newFile');
+
+document.querySelectorAll('[data-grp="sens"]').forEach(el=>{
+  el.addEventListener('click',()=>{
+    document.querySelectorAll('[data-grp="sens"]').forEach(x=>x.classList.remove('on'));
+    el.classList.add('on');
+  });
+});
+document.querySelectorAll('[data-grp="watch"]').forEach(el=>el.addEventListener('click',()=>el.classList.toggle('on')));
+
+// ── Progress ───────────────────────────────────────────────────
+const STAGES=[
+  [5,'Reading files','Loading document bytes…'],
+  [30,'Extracting text','Parsing pages — OCR applied where needed'],
+  [50,'Normalizing','Splitting into comparable blocks'],
+  [65,'Aligning sections','Matching content between versions'],
+  [80,'Detecting changes','Running diff algorithm'],
+  [92,'Classifying','Scoring severity and tagging categories'],
+  [100,'Complete','Comparison ready'],
+];
+function setStage(i,title,sub){
+  const pct=STAGES[i][0];
+  $('prog-title').textContent=title||STAGES[i][1];
+  $('prog-sub').textContent=sub||STAGES[i][2];
+  $('prog-bar').style.width=pct+'%';$('prog-pct').textContent=pct+'%';
+  if(i>0){const p=$('si-'+(i-1));p.className='si done';if(!p.querySelector('.si-check'))p.innerHTML+=`<i class="ti ti-check si-check"></i>`;}
+  $('si-'+i).className='si active';
+  // Hide per-page track when moving past extraction stage
+  if(i>1){const t=$('prog-page-track');if(t)t.style.display='none';}
+}
+async function runCompare(){
+  if(!S.oldFile||!S.newFile){$('err-msg').textContent='Upload both files first.';$('err-msg').classList.remove('hidden');return;}
+  showPage('progress');
+  const sl=$('stage-list');sl.innerHTML='';
+  STAGES.forEach(([,l],i)=>{const d=document.createElement('div');d.className='si';d.id='si-'+i;d.innerHTML=`<div class="si-dot"></div><span>${l}</span>`;sl.appendChild(d);});
+  try{
+    // Stage 0: Reading files
+    setStage(0);
+    await new Promise(r=>setTimeout(r,0));
+
+    // Extract sequentially so per-page progress is clear (not parallel)
+    const oc=await extract(S.oldFile);
+    const nc=await extract(S.newFile);
+    S.oldContent=oc;S.newContent=nc;
+    S.oldText=oc.text;S.newText=nc.text;
+    const isX=oc.type==='xlsx'||nc.type==='xlsx';
+    if(!isX){
+      if(oc.type==='xlsx'||nc.type==='xlsx')throw new Error('Cannot compare a spreadsheet with a non-spreadsheet file.');
+      if(!oc.blocks.length)throw new Error(`No readable text found in ${S.oldFile.name}. If it is a scan, check that the image is legible and OCR could load.`);
+      if(!nc.blocks.length)throw new Error(`No readable text found in ${S.newFile.name}. If it is a scan, check that the image is legible and OCR could load.`);
+    }
+
+    // Stage 1: Extracted — show OCR summary if any
+    setStage(1);
+    const totalOcr=(oc.ocrPageCount||0)+(nc.ocrPageCount||0);
+    const detailEl=$('prog-detail');
+    if(detailEl && totalOcr>0){
+      detailEl.innerHTML=`Text extracted — OCR applied to ${totalOcr} scanned page${totalOcr>1?'s':''}`;
+    } else if(detailEl){
+      detailEl.textContent='Text extracted from native layer';
+    }
+    await new Promise(r=>setTimeout(r,0));
+
+    // Stage 2-3: Diff
+    setStage(2);
+    await new Promise(r=>setTimeout(r,0));
+    const isXlsx=oc.type==='xlsx'||nc.type==='xlsx';
+    setStage(3);
+    await new Promise(r=>setTimeout(r,0));
+    S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
+
+    // Stage 4-5: Classify
+    setStage(4);
+    await new Promise(r=>setTimeout(r,0));
+    setStage(5);
+    await new Promise(r=>setTimeout(r,0));
+    S.active=S.changes[0]||null;
+
+    // Stage 6: Done
+    setStage(6);
+    const last=$('si-'+(STAGES.length-1));last.className='si done';if(!last.querySelector('.si-check'))last.innerHTML+=`<i class="ti ti-check si-check"></i>`;
+    $('prog-ico').innerHTML='<i class="ti ti-check" style="font-size:36px;color:var(--green)"></i>';
+    await new Promise(r=>setTimeout(r,250));
+    buildViewer();showPage('viewer');
+  }catch(e){
+    console.error(e);showPage('upload');
+    $('err-msg').textContent='Error: '+e.message;$('err-msg').classList.remove('hidden');
+  }finally{await stopOcr();}
+}
+
+// ── Build viewer ───────────────────────────────────────────────
+function buildViewer(){
+  const{changes,oldFile,newFile}=S;
+  $('pane-old-name').textContent=oldFile?.name||'Old';
+  $('pane-new-name').textContent=newFile?.name||'New';
+  $('cp-name').textContent=(oldFile?.name||'Old')+' → '+(newFile?.name||'New');
+  const cnt={added:0,deleted:0,modified:0,moved:0,numeric:0,date:0,financial:0,high:0};
+  changes.forEach(c=>{
+    if(cnt[c.type]!==undefined)cnt[c.type]++;
+    c.cats?.forEach(cat=>{if(cnt[cat]!==undefined)cnt[cat]++;});
+    if(['high','critical'].includes(c.sev))cnt.high++;
+  });
+  $('total-pill').textContent=changes.length;
+  $('s-add').textContent=cnt.added;$('s-del').textContent=cnt.deleted;
+  $('s-mod').textContent=cnt.modified;$('s-mov').textContent=cnt.moved;
+  const mr=$('meta-row');mr.innerHTML='';
+  if(cnt.numeric)mr.innerHTML+=`<span class="mpill mp-num">${cnt.numeric} numeric</span>`;
+  if(cnt.date)mr.innerHTML+=`<span class="mpill mp-date">${cnt.date} date</span>`;
+  if(cnt.financial)mr.innerHTML+=`<span class="mpill mp-fin">${cnt.financial} financial</span>`;
+  if(cnt.high)mr.innerHTML+=`<span class="mpill mp-hi">${cnt.high} high impact</span>`;
+  const fr=$('filter-row');fr.innerHTML='';
+  [['all','All'],['added','Added'],['deleted','Deleted'],['modified','Modified'],['numeric','Numeric'],['financial','Financial'],['high_impact','High impact']].forEach(([f,l])=>{
+    const b=document.createElement('div');b.className='fc'+(f==='all'?' on':'');b.dataset.f=f;b.textContent=l;
+    b.addEventListener('click',()=>{S.filter=f;fr.querySelectorAll('.fc').forEach(x=>x.classList.toggle('on',x.dataset.f===f));renderList();});
+    fr.appendChild(b);
+  });
+  $('search-inp').addEventListener('input',e=>{S.search=e.target.value;renderList();});
+  buildPanes();
+  renderList();
+  if(S.active)setActive(S.active.id);
+}
+
+// ── Build panes ───────────────────────────────────────────────
+function buildPanes(){
+  const po=$('pane-old'),pn=$('pane-new');
+  po.innerHTML='';pn.innerHTML='';
+  const oc=S.oldContent,nc=S.newContent;
+  if(oc.type==='xlsx'||nc.type==='xlsx'){renderXlsxPane(po,oc,'old');renderXlsxPane(pn,nc,'new');return;}
+  const byOld=new Map(),byNew=new Map();
+  S.changes.forEach(c=>{(c.oldIdxs||[]).forEach(i=>{if(!byOld.has(i))byOld.set(i,c);});(c.newIdxs||[]).forEach(i=>{if(!byNew.has(i))byNew.set(i,c);});});
+  const draw=(pane,c,byIdx,side)=>{
+    const sents=c.blocks.map(b=>b.text);
+    if(c.type==='pdf')renderPdfPane(pane,c,side);
+    else if(c.type==='docx')renderDocxPane(pane,c,sents,byIdx,side);
+    else if(c.type==='html')renderHtmlPane(pane,c,sents,byIdx,side);
+    else if(c.type==='csv')renderCsvPane(pane,c,byIdx,side);
+    else renderTextPane(pane,sents,byIdx,side);
+  };
+  draw(po,oc,byOld,'old');draw(pn,nc,byNew,'new');
+}
+
+// ── Element-level word marking for DOCX/HTML panes ────────────
+// Marks only the changed words inside the block's span of the element, keeping the rest of the paragraph intact.
+function markEl(el,ch,side,blockText){
+  const words=side==='old'?ch.rmWords:ch.addWords;
+  if(!words||!words.length)return;
+  const keys=new Set(words.map(w=>w.k));
+  const text=el.textContent,at=text.indexOf(blockText.slice(0,40)),from=at<0?0:at,to=at<0?text.length:at+blockText.length;
+  let h='',pos=0;
+  text.split(/(\s+)/).forEach(tok=>{
+    const inSpan=pos>=from&&pos<to;pos+=tok.length;
+    h+=inSpan&&tok.trim()&&keys.has(normWord(tok))?`<mark class="${side==='old'?'rm':'ad'}">${esc(tok)}</mark>`:esc(tok);
+  });
+  el.innerHTML=h;
+}
+
+// ── PDF renderer: lazy page canvases + percentage-positioned word overlays ──
+function renderPdfPane(container,content,side){
+  container.innerHTML='';
+  const wrap=document.createElement('div');wrap.className='pdf-wrap';container.appendChild(wrap);
+  const pageEls=[];
+  content.pages.forEach((pg,i)=>{
+    const w=document.createElement('div');w.className='pdf-page-wrap';
+    w.style.cssText=`position:relative;width:100%;max-width:${Math.round(pg.w*1.6)}px;aspect-ratio:${pg.w}/${pg.h};background:#fff;margin-bottom:2px`;
+    w.dataset.page=i;
+    const tag=document.createElement('div');tag.className='pdf-ptag';tag.textContent='p.'+(i+1)+(pg.ocr?' · OCR':'');w.appendChild(tag);
+    wrap.appendChild(w);pageEls.push(w);
+  });
+  // overlays for every change on this side
+  const boxKey=side==='old'?'oldBoxes':'newBoxes',ancKey=side==='old'?'oldAnchor':'newAnchor';
+  S.changes.forEach(ch=>{
+    const boxes=ch[boxKey]||[];
+    boxes.forEach(({p,b})=>{
+      const pw=pageEls[p];if(!pw)return;
+      const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;
+      d.style.cssText=`left:${b[0]*100-.15}%;top:${b[1]*100-.1}%;width:${(b[2]-b[0])*100+.3}%;height:${(b[3]-b[1])*100+.2}%`;
+      d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);
+      d.addEventListener('click',()=>setActive(ch.id));
+      pw.appendChild(d);
+    });
+    if(!boxes.length&&ch[ancKey]){ // one-sided change: mark where it happened on this side
+      const{p,b}=ch[ancKey],pw=pageEls[p];if(!pw)return;
+      const d=document.createElement('div');d.className='pdf-anchor';d.dataset.id=ch.id;
+      d.style.cssText=`left:0;right:0;top:${b[1]*100}%;height:${(b[3]-b[1])*100}%`;
+      d.title='Change '+ch.type+' on the other side, here';
+      d.addEventListener('click',()=>setActive(ch.id));
+      pw.appendChild(d);
+    }
+  });
+  // lazy canvas rendering
+  const SCALE=1.6;
+  const draw=async el=>{
+    if(el.dataset.done)return;el.dataset.done='1';
+    try{
+      const page=await content.pdfDoc.getPage(+el.dataset.page+1),vp=page.getViewport({scale:SCALE});
+      const cv=document.createElement('canvas');cv.width=vp.width;cv.height=vp.height;
+      cv.style.cssText='position:absolute;inset:0;width:100%;height:100%';
+      await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+      el.insertBefore(cv,el.firstChild);
+    }catch(e){console.warn('page render failed',e);}
+  };
+  const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)draw(e.target);}),{root:container,rootMargin:'800px 0px'});
+  pageEls.forEach(el=>io.observe(el));
+  content._draw=draw;content._pageEls=pageEls;
+}
+
+
+// ── DOCX renderer ─────────────────────────────────────────────
+function renderDocxPane(container,content,sents,byIdx,side){
+  const wrap=document.createElement('div');wrap.className='doc-render';
+  wrap.innerHTML=content.html;
+  container.appendChild(wrap);
+  const els=[...wrap.querySelectorAll('p,li,td,th,h1,h2,h3,h4,h5,h6')];
+  sents.forEach((sent,idx)=>{
+    const ch=byIdx.get(idx);if(!ch)return;
+    const sentLow=sent.trim().toLowerCase().slice(0,60);
+    for(const el of els){
+      if(el.dataset.highlighted)continue;
+      const etxt=(el.textContent||'').trim().toLowerCase();
+      if(etxt.includes(sentLow)||sentLow.includes(etxt.slice(0,50))){
+        el.classList.add('hl-'+ch.type);el.dataset.id=ch.id;el.dataset.highlighted='1';
+        if(ch.type==='modified')markEl(el,ch,side,sent);
+        el.addEventListener('click',()=>setActive(ch.id));
+        break;
+      }
+    }
+  });
+}
+
+// ── HTML renderer ─────────────────────────────────────────────
+function renderHtmlPane(container,content,sents,byIdx,side){
+  const wrap=document.createElement('div');wrap.className='doc-render';
+  const clean=content.html
+    .replace(/<script[\s\S]*?<\/script>/gi,'')
+    .replace(/<style[\s\S]*?<\/style>/gi,'')
+    .replace(/<head[\s\S]*?<\/head>/gi,'')
+    .replace(/<html[^>]*>|<\/html>|<body[^>]*>|<\/body>/gi,'');
+  wrap.innerHTML=clean;
+  container.appendChild(wrap);
+  const els=[...wrap.querySelectorAll('p,li,td,th,h1,h2,h3,h4,h5,h6,div,span')].filter(e=>e.childElementCount===0&&(e.textContent||'').trim());
+  sents.forEach((sent,idx)=>{
+    const ch=byIdx.get(idx);if(!ch)return;
+    const sentLow=sent.trim().toLowerCase().slice(0,60);
+    for(const el of els){
+      if(el.dataset.highlighted)continue;
+      const etxt=(el.textContent||'').trim().toLowerCase();
+      if(etxt.includes(sentLow)||sentLow.includes(etxt.slice(0,50))){
+        el.classList.add('hl-'+ch.type);el.dataset.id=ch.id;el.dataset.highlighted='1';
+        if(ch.type==='modified')markEl(el,ch,side,sent);
+        el.addEventListener('click',()=>setActive(ch.id));break;
+      }
+    }
+  });
+}
+
+// ── Text renderer ─────────────────────────────────────────────
+function renderTextPane(container,sents,byIdx,side){
+  const wrap=document.createElement('div');wrap.className='txt-render';
+  sents.forEach((sent,idx)=>{
+    const ch=byIdx.get(idx);
+    const p=document.createElement('p');
+    if(ch){
+      p.className='hl-'+ch.type;p.dataset.id=ch.id;
+      if(ch.type==='modified'&&(ch.rmWords||ch.addWords)){p.textContent=sent;markEl(p,ch,side,sent);}
+      else p.textContent=sent;
+      p.addEventListener('click',()=>setActive(ch.id));
+    }else{p.textContent=sent;}
+    wrap.appendChild(p);
+  });
+  container.appendChild(wrap);
+}
+
+// ── CSV renderer ──────────────────────────────────────────────
+function renderCsvPane(container,content,byIdx,side){
+  const rowCh=new Map();(content.rowOf||[]).forEach((ri,bi)=>{const c=byIdx&&byIdx.get(bi);if(c)rowCh.set(ri,c);});
+  const wrap=document.createElement('div');wrap.className='xlsx-render';
+  if(!content.rows||!content.rows.length){wrap.textContent='Empty file';container.appendChild(wrap);return;}
+  const tw=document.createElement('div');tw.className='xlsx-table-wrap';
+  const t=document.createElement('table');t.className='xlsx-table';
+  const thead=document.createElement('thead'),tbody=document.createElement('tbody');
+  content.rows.forEach((row,ri)=>{
+    const tr=document.createElement('tr');
+    row.forEach(cell=>{
+      const td=document.createElement(ri===0?'th':'td');
+      td.textContent=cell;tr.appendChild(td);
+    });
+    const rc=rowCh.get(ri);if(rc){tr.classList.add('hl-'+rc.type);tr.dataset.id=rc.id;tr.style.cursor='pointer';tr.addEventListener('click',()=>setActive(rc.id));}
+    if(ri===0)thead.appendChild(tr);else tbody.appendChild(tr);
+  });
+  t.appendChild(thead);t.appendChild(tbody);tw.appendChild(t);wrap.appendChild(tw);
+  container.appendChild(wrap);
+}
+
+// ── XLSX renderer ─────────────────────────────────────────────
+function renderXlsxPane(container,content,side){
+  const wrap=document.createElement('div');wrap.className='xlsx-render';
+  if(!content.sheets){
+    const p=document.createElement('p');p.style.padding='20px';p.style.color='#666';p.textContent='No data';
+    wrap.appendChild(p);container.appendChild(wrap);return;
+  }
+  const chMap=new Map();
+  S.changes.forEach(c=>{if(c.sheet)chMap.set(c.sheet+'|'+c.row+'|'+c.col,c);});
+  const tabRow=document.createElement('div');tabRow.className='sheet-tab-row';
+  const paneData=document.createElement('div');
+  content.sheetNames.forEach((name,si)=>{
+    const tab=document.createElement('div');tab.className='sheet-tab'+(si===0?' on':'');
+    tab.textContent=name;
+    tab.addEventListener('click',()=>{
+      tabRow.querySelectorAll('.sheet-tab').forEach(t=>t.classList.remove('on'));
+      tab.classList.add('on');
+      renderSheet(paneData,content.sheets[name],name,chMap,side);
+    });
+    tabRow.appendChild(tab);
+  });
+  wrap.appendChild(tabRow);wrap.appendChild(paneData);
+  if(content.sheetNames.length>0)renderSheet(paneData,content.sheets[content.sheetNames[0]],content.sheetNames[0],chMap,side);
+  container.appendChild(wrap);
+}
+function renderSheet(container,rows,sheetName,chMap,side){
+  container.innerHTML='';
+  if(!rows||!rows.length){container.textContent='Empty sheet';return;}
+  const tw=document.createElement('div');tw.className='xlsx-table-wrap';
+  const t=document.createElement('table');t.className='xlsx-table';
+  const thead=document.createElement('thead'),tbody=document.createElement('tbody');
+  const maxCols=Math.max(...rows.map(r=>r.length));
+  const htr=document.createElement('tr');
+  const rth=document.createElement('th');rth.textContent='';rth.style.background='#e8e8e6';rth.style.color='#888';htr.appendChild(rth);
+  for(let c=0;c<maxCols;c++){const th=document.createElement('th');th.textContent=colLetter(c);th.style.textAlign='center';htr.appendChild(th);}
+  thead.appendChild(htr);
+  rows.forEach((row,ri)=>{
+    const tr=document.createElement('tr');
+    const rnum=document.createElement('td');rnum.textContent=ri+1;rnum.style.background='#f0f0ee';rnum.style.color='#888';rnum.style.textAlign='center';rnum.style.fontSize='10px';tr.appendChild(rnum);
+    for(let c=0;c<maxCols;c++){
+      const td=document.createElement('td');
+      td.textContent=row[c]!==undefined?String(row[c]):'';
+      const key=sheetName+'|'+ri+'|'+c;
+      const ch=chMap.get(key);
+      if(ch){
+        td.classList.add('cell-'+ch.type);
+        td.title=ch.type+': '+(ch.oldText||'(empty)')+' → '+(ch.newText||'(empty)');
+        td.style.cursor='pointer';
+        td.addEventListener('click',()=>setActive(ch.id));
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  });
+  t.appendChild(thead);t.appendChild(tbody);tw.appendChild(t);container.appendChild(tw);
+}
+
+// ── Change list rendering ─────────────────────────────────────
+function renderList(){
+  const{changes,filter,search}=S;
+  S.filtered=changes.filter(c=>{
+    if(filter==='high_impact'&&!['high','critical'].includes(c.sev))return false;
+    if(filter!=='all'&&filter!=='high_impact'&&c.type!==filter&&!c.cats?.includes(filter))return false;
+    if(search){const q=search.toLowerCase();if(!c.oldText?.toLowerCase().includes(q)&&!c.newText?.toLowerCase().includes(q))return false;}
+    return true;
+  });
+  const cl=$('change-list');cl.innerHTML='';
+  if(!S.filtered.length){cl.innerHTML='<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">No changes match</div>';return;}
+  const cbM={added:'cb-add',deleted:'cb-del',modified:'cb-mod',moved:'cb-mov'};
+  const csM={low:'cs-low',medium:'cs-med',high:'cs-high',critical:'cs-crit'};
+  S.filtered.forEach(c=>{
+    const d=document.createElement('div');
+    d.className='ci'+(S.active?.id===c.id?' active':'');d.dataset.id=c.id;
+    let pills='';
+    if(c.cats?.includes('financial'))pills+=`<span class="cpill" style="background:var(--amber-bg);color:var(--amber)">fin</span>`;
+    if(c.cats?.includes('numeric'))pills+=`<span class="cpill" style="background:var(--blue-bg);color:var(--blue)">num</span>`;
+    if(c.cats?.includes('date'))pills+=`<span class="cpill" style="background:var(--purple-bg);color:var(--purple)">date</span>`;
+    if(c.sheet)pills+=`<span class="cpill" style="background:var(--card);color:var(--text2)">${c.sheet}!${c.cellRef||''}</span>`;
+    if(c.page!==undefined&&c.page!==null)pills+=`<span class="cpill" style="background:var(--card);color:var(--text2)">p.${c.page+1}</span>`;
+    if(c.ocr)pills+=`<span class="cpill" style="background:var(--purple-bg);color:var(--purple)">OCR${c.conf!=null?' '+c.conf+'%':''}</span>`;
+    if(c.cats?.includes('verify'))pills+=`<span class="cpill" style="background:var(--amber-bg);color:var(--amber)">verify</span>`;
+    let preview='';
+    if(c.type==='modified'&&c.rmText&&c.addText){
+      preview=`<span style="color:#fca5a5;text-decoration:line-through">${esc(c.rmText.slice(0,50))}${c.rmText.length>50?'…':''}</span> <span style="color:var(--text3)">→</span> <span style="color:#86efac">${esc(c.addText.slice(0,50))}${c.addText.length>50?'…':''}</span>`;
+    } else if(c.type==='deleted'){
+      preview=`<span style="color:#fca5a5;text-decoration:line-through">${esc((c.oldText||'').slice(0,80))}${(c.oldText||'').length>80?'…':''}</span>`;
+    } else if(c.type==='added'){
+      preview=`<span style="color:#86efac">+ ${esc((c.newText||'').slice(0,80))}${(c.newText||'').length>80?'…':''}</span>`;
+    } else {
+      preview=`<span style="color:var(--text2)">${esc((c.oldText||c.newText).slice(0,80))}${(c.oldText||c.newText).length>80?'…':''}</span>`;
+    }
+    d.innerHTML=`<div class="ci-head"><span class="cnum">#${c.id}</span><span class="cbadge ${cbM[c.type]||'cb-mod'}">${c.type}</span><span class="csev ${csM[c.sev]||'cs-low'}">${c.sev}</span></div><div class="ci-text">${preview}</div>${pills?`<div class="ci-pills">${pills}</div>`:''}`;
+    d.addEventListener('click',()=>setActive(c.id));
+    cl.appendChild(d);
+  });
+}
+
+// ── Set active change ─────────────────────────────────────────
+function setActive(id){
+  const ch=S.changes.find(c=>c.id===id);if(!ch)return;
+  S.active=ch;
+  document.querySelectorAll('.ci').forEach(el=>el.classList.toggle('active',el.dataset.id==id));
+  ['old','new'].forEach(side=>{
+    const pane=$('pane-'+side);
+    pane.querySelectorAll('.focus-ring').forEach(el=>el.classList.remove('focus-ring'));
+    const els=pane.querySelectorAll(`[data-id="${id}"]`);
+    els.forEach(el=>el.classList.add('focus-ring'));
+    if(els[0])els[0].scrollIntoView({behavior:'smooth',block:'center'});
+  });
+  renderDetail(ch);
+  document.querySelectorAll('.ci').forEach(el=>el.classList.toggle('active',el.dataset.id==id));
+}
+
+// ── Detail panel ──────────────────────────────────────────────
+function renderDetail(ch){
+  const dp=$('detail');
+  if(!ch){dp.innerHTML='<div class="detail-empty"><i class="ti ti-hand-click" style="font-size:15px"></i> Select a change to see details</div>';return;}
+  const cbM={added:'cb-add',deleted:'cb-del',modified:'cb-mod',moved:'cb-mov'};
+  const csM={low:'cs-low',medium:'cs-med',high:'cs-high',critical:'cs-crit'};
+  let catPills=(ch.cats||[]).map(c=>`<span class="cpill" style="background:var(--card);color:var(--text2);font-size:10px">${c}</span>`).join('');
+  if(ch.sheet)catPills+=`<span class="cpill" style="background:var(--card);color:var(--text2);font-size:10px">${ch.sheet}!${ch.cellRef||''}</span>`;
+  const oldBox=ch.type!=='added'&&ch.oldText?`<div class="di-col"><div class="di-label">Old</div><div class="di-box di-old">${inlineDiff(ch.oldText,ch.newText,'old')}</div></div>`:'';
+  const newBox=ch.type!=='deleted'&&ch.newText?`<div class="di-col"><div class="di-label">New</div><div class="di-box di-new">${inlineDiff(ch.oldText,ch.newText,'new')}</div></div>`:'';
+  let chips='';
+  if(ch.rmText)chips+=`<span class="dchip dch-rm">− ${esc(ch.rmText.slice(0,80))}${ch.rmText.length>80?'…':''}</span>`;
+  if(ch.addText)chips+=`<span class="dchip dch-add">+ ${esc(ch.addText.slice(0,80))}${ch.addText.length>80?'…':''}</span>`;
+  dp.innerHTML=`<div class="detail-inner"><div class="di-meta"><span class="di-id">Change #${ch.id}</span><span class="cbadge ${cbM[ch.type]||'cb-mod'}">${ch.type}</span><span class="csev ${csM[ch.sev]||'cs-low'}">${ch.sev}</span>${catPills}${ch.sim!==undefined?`<span class="di-sim">${ch.sim}% similar</span>`:''}</div><div class="di-cols">${oldBox}${newBox}</div>${chips?`<div class="di-chips">${chips}</div>`:''}</div>`;
+}
+
+// ── Wire buttons ──────────────────────────────────────────────
+$('btn-compare').addEventListener('click',runCompare);
+$('btn-back').addEventListener('click',()=>showPage('upload'));
+$('btn-new').addEventListener('click',()=>showPage('upload'));
+$('btn-prev').addEventListener('click',()=>{const i=S.filtered.findIndex(c=>c.id===S.active?.id);if(i>0)setActive(S.filtered[i-1].id);});
+$('btn-next').addEventListener('click',()=>{const i=S.filtered.findIndex(c=>c.id===S.active?.id);if(i<S.filtered.length-1)setActive(S.filtered[i+1].id);});
+$('btn-export').addEventListener('click',()=>{
+  if(!S.changes.length)return;
+  const rows=[['#','Type','Severity','Page','OCR','OCR confidence','Sheet','Cell','Categories','Old text','New text','Removed','Added']];
+  S.changes.forEach(c=>rows.push([c.id,c.type,c.sev,c.page!=null?c.page+1:'',c.ocr?'yes':'',c.conf??'',c.sheet||'',c.cellRef||'',(c.cats||[]).join(';'),c.oldText,c.newText,c.rmText,c.addText]));
+  const csv=rows.map(r=>r.map(v=>'"'+String(v||'').replace(/"/g,'""')+'"').join(',')).join('\n');
+  const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='diffiq-changes.csv';a.click();
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'&&S.active)$('btn-next').click();
+  if(e.key==='ArrowUp'&&S.active)$('btn-prev').click();
+});
+
+// ── Service Worker ────────────────────────────────────────────
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('sw.js')
+      .then(r=>console.log('[DiffIQ] SW registered'))
+      .catch(e=>console.warn('[DiffIQ] SW failed',e));
+  });
+}
+</script>
+</body>
+</html>
