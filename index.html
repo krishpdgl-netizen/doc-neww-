@@ -644,7 +644,7 @@ async function extractPptx(buf){
 }
 // ── Gemini PDF comparison ─────────────────────────────────────
 // PDF files are deliberately routed through Gemini. Non-PDF files never call the API.
-const GEMINI_MODEL='gemini-3.6-flash';
+const GEMINI_MODEL='gemini-3.5-flash lite';
 const GEMINI_KEY_STORE='diffiq_gemini_api_key';
 const isPdfFile=f=>!!f&&f.name.toLowerCase().endsWith('.pdf');
 function getGeminiKey(){
