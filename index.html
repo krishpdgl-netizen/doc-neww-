@@ -235,7 +235,7 @@ mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0
 .pdf-hl-overlay{position:absolute;top:0;left:0;pointer-events:none}
 .pdf-text-overlay{position:absolute;top:0;left:0;overflow:hidden;opacity:0;line-height:1;white-space:pre;pointer-events:none}
 .pdf-text-layer{position:absolute;inset:0;z-index:2;overflow:hidden;line-height:1;pointer-events:none}
-.pdf-text-layer span{position:absolute;white-space:pre;transform-origin:0 0;color:transparent;user-select:none}
+.pdf-text-layer div,.pdf-text-layer span{position:absolute;white-space:pre;transform-origin:0 0;color:transparent!important;background:transparent!important;user-select:none}
 .pdf-text-layer .highlight-hit{color:transparent}
 .gemini-note{font-size:10px;color:var(--purple);margin-top:8px;line-height:1.4}
 .gemini-key-row{display:none;align-items:center;gap:8px;margin-top:12px}
@@ -1234,37 +1234,60 @@ function renderPdfPane(container,content,side){
   const normalizeDomText=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\u2018\u2019`´]/g,"'").replace(/[\u2010-\u2015]/g,'-').replace(/[^\p{L}\p{N}\u20b9$%]+/gu,' ').trim();
   const highlightTarget=async(pw,target,pageNo,chKey,ch)=>{
     if(!target)return false;
-    const spans=[...pw.querySelectorAll('.pdf-text-layer span')].filter(s=>(s.textContent||'').trim());
-    if(!spans.length)return false;
-    const targetNorm=normalizeDomText(target),targetTokens=targetNorm.split(/\s+/).filter(Boolean);
+    // PDF.js 3.x renderTextLayer creates DIVs (not SPANs). Support both so
+    // the highlight layer is based on the exact browser-rendered text layer.
+    const nodes=[...pw.querySelectorAll('.pdf-text-layer div, .pdf-text-layer span')]
+      .filter(n=>(n.textContent||'').trim() && n.getBoundingClientRect().width>0);
+    if(!nodes.length)return false;
+    const targetTokens=normalizeDomText(target).split(/\s+/).filter(Boolean);
     if(!targetTokens.length)return false;
-    const spanTokens=spans.map((s,i)=>({s,i,t:normalizeDomText(s.textContent)}));
+
+    const nodeTokens=nodes.map((n,i)=>({n,i,t:normalizeDomText(n.textContent)}));
+    const flat=[];
+    nodeTokens.forEach((x)=>{
+      const ts=x.t.split(/\s+/).filter(Boolean);
+      ts.forEach(t=>flat.push({node:x.n,t}));
+    });
+
+    // Find the requested text in the actual PDF.js text layer. This works
+    // even when PDF.js splits one sentence into many positioned divs.
     let hitStart=-1,hitEnd=-1;
-    // Prefer a contiguous span sequence; PDF.js often gives one word per span.
-    for(let i=0;i<spanTokens.length;i++){
-      let ti=0,j=i;
-      while(j<spanTokens.length&&ti<targetTokens.length){
-        const st=spanTokens[j].t;
-        if(!st){j++;continue;}
-        const parts=st.split(/\s+/).filter(Boolean);
-        let ok=true;
-        for(let k=0;k<parts.length&&ti<targetTokens.length;k++,ti++){
-          if(!fuzzyTokenEq(parts[k],targetTokens[ti])){ok=false;break;}
-        }
-        if(!ok)break;
-        j++;
+    for(let i=0;i<=flat.length-targetTokens.length;i++){
+      let ok=true;
+      for(let j=0;j<targetTokens.length;j++){
+        if(!fuzzyTokenEq(flat[i+j].t,targetTokens[j])){ok=false;break;}
       }
-      if(ti===targetTokens.length){hitStart=i;hitEnd=j-1;break;}
+      if(ok){hitStart=i;hitEnd=i+targetTokens.length-1;break;}
+    }
+
+    // If exact token matching fails, progressively use a distinctive anchor
+    // (first/last 6 tokens) to survive PDF text extraction punctuation quirks.
+    if(hitStart<0 && targetTokens.length>8){
+      const probes=[targetTokens.slice(0,6),targetTokens.slice(-6)];
+      for(const probe of probes){
+        for(let i=0;i<=flat.length-probe.length;i++){
+          let ok=true;
+          for(let j=0;j<probe.length;j++)if(!fuzzyTokenEq(flat[i+j].t,probe[j])){ok=false;break;}
+          if(ok){hitStart=i;hitEnd=i+probe.length-1;break;}
+        }
+        if(hitStart>=0)break;
+      }
     }
     if(hitStart<0)return false;
+
+    const used=new Set();
     for(let i=hitStart;i<=hitEnd;i++){
-      const sp=spanTokens[i].s;const r=sp.getBoundingClientRect(),pr=pw.getBoundingClientRect();
-      if(r.width<1||r.height<1)continue;
+      const node=flat[i].node;
+      if(used.has(node))continue;
+      used.add(node);
+      const r=node.getBoundingClientRect(),pr=pw.getBoundingClientRect();
+      if(r.width<1||r.height<1||pr.width<1||pr.height<1)continue;
       const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;
-      d.style.cssText=`left:${((r.left-pr.left)/pr.width)*100}%;top:${((r.top-pr.top)/pr.height)*100}%;width:${(r.width/pr.width)*100}%;height:${(r.height/pr.height)*100}%`;
-      d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);
+      d.style.cssText=`left:${Math.max(0,((r.left-pr.left)/pr.width)*100-.15)}%;top:${Math.max(0,((r.top-pr.top)/pr.height)*100-.1)}%;width:${Math.min(100,(r.width/pr.width)*100+.3)}%;height:${Math.min(100,(r.height/pr.height)*100+.2)}%`;
+      d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);
+      d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);
     }
-    return true;
+    return used.size>0;
   };
   const applyGeminiToPage=async(pw,pageIndex)=>{
     if(pw.dataset.geminiApplied==='1')return;
