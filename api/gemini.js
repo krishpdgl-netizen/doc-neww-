@@ -7,9 +7,18 @@ function send(res, status, body) {
   res.status(status).json(body);
 }
 
-async function streamToBuffer(stream) {
-  const ab = await new Response(stream).arrayBuffer();
-  return Buffer.from(ab);
+// Helper to handle eventual consistency when reading blobs immediately after upload
+async function getBlobWithRetry(path, retries = 5, delayMs = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const blob = await get(path, { access: 'private', useCache: false });
+      if (blob) return blob;
+    } catch (err) {
+      if (i === retries - 1) throw err;
+    }
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+  throw new Error(`Blob not found after retries: ${path}`);
 }
 
 async function uploadToGemini(buffer, displayName, apiKey) {
@@ -35,14 +44,12 @@ async function uploadToGemini(buffer, displayName, apiKey) {
 
   if (!start.ok) {
     const raw = await start.text();
-
     throw new Error(
       `Gemini file-upload start ${start.status}: ${raw}`
     );
   }
 
   const uploadUrl = start.headers.get('x-goog-upload-url');
-
   if (!uploadUrl) {
     throw new Error(
       'Gemini did not return an upload URL.'
@@ -61,18 +68,14 @@ async function uploadToGemini(buffer, displayName, apiKey) {
   });
 
   const raw = await finish.text();
-
   let data = null;
-
   try {
     data = JSON.parse(raw);
   } catch (_) {}
 
   if (!finish.ok) {
     throw new Error(
-      `Gemini file upload ${finish.status}: ${
-        data?.error?.message || raw
-      }`
+      `Gemini file upload ${finish.status}: ${data?.error?.message || raw}`
     );
   }
 
@@ -87,17 +90,13 @@ async function uploadToGemini(buffer, displayName, apiKey) {
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
-    return send(res, 405, {
-      error: 'Method not allowed.'
-    });
+    return send(res, 405, { error: 'Method not allowed.' });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
-
   if (!apiKey) {
     return send(res, 500, {
-      error:
-        'GEMINI_API_KEY is not configured in Vercel Environment Variables.'
+      error: 'GEMINI_API_KEY is not configured in Vercel Environment Variables.'
     });
   }
 
@@ -135,26 +134,33 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    // 1. Fetch metadata with retry logic for eventual consistency
     const [oldBlob, newBlob] = await Promise.all([
-      get(oldPath, {
-        access: 'private',
-        useCache: false
-      }),
-      get(newPath, {
-        access: 'private',
-        useCache: false
-      })
+      getBlobWithRetry(oldPath),
+      getBlobWithRetry(newPath)
     ]);
 
-    if (!oldBlob || !newBlob) {
+    if (!oldBlob || !newBlob || !oldBlob.url || !newBlob.url) {
       throw new Error(
         'Temporary PDF could not be read from Vercel Blob.'
       );
     }
 
+    // 2. Download the actual file content using the URLs provided by the metadata
+    const [oldRes, newRes] = await Promise.all([
+      fetch(oldBlob.url),
+      fetch(newBlob.url)
+    ]);
+
+    if (!oldRes.ok || !newRes.ok) {
+      throw new Error(
+        'Failed to download PDFs from Vercel Blob.'
+      );
+    }
+
     const [oldBuffer, newBuffer] = await Promise.all([
-      streamToBuffer(oldBlob.stream),
-      streamToBuffer(newBlob.stream)
+      oldRes.arrayBuffer().then(ab => Buffer.from(ab)),
+      newRes.arrayBuffer().then(ab => Buffer.from(ab))
     ]);
 
     if (
@@ -167,21 +173,11 @@ module.exports = async function handler(req, res) {
     }
 
     const [oldUri, newUri] = await Promise.all([
-      uploadToGemini(
-        oldBuffer,
-        'original.pdf',
-        apiKey
-      ),
-      uploadToGemini(
-        newBuffer,
-        'updated.pdf',
-        apiKey
-      )
+      uploadToGemini(oldBuffer, 'original.pdf', apiKey),
+      uploadToGemini(newBuffer, 'updated.pdf', apiKey)
     ]);
 
-    const selectedModel =
-      String(model || MODEL_DEFAULT);
-
+    const selectedModel = String(model || MODEL_DEFAULT);
     const endpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/' +
       encodeURIComponent(selectedModel) +
@@ -197,9 +193,7 @@ module.exports = async function handler(req, res) {
         contents: [
           {
             parts: [
-              {
-                text: prompt
-              },
+              { text: prompt },
               {
                 fileData: {
                   mimeType: 'application/pdf',
@@ -223,9 +217,7 @@ module.exports = async function handler(req, res) {
     });
 
     const raw = await upstream.text();
-
     let data;
-
     try {
       data = JSON.parse(raw);
     } catch (_) {
@@ -234,53 +226,29 @@ module.exports = async function handler(req, res) {
 
     if (!upstream.ok) {
       const message =
-        data?.error?.message ||
-        raw ||
-        `Gemini API returned ${upstream.status}`;
-
+        data?.error?.message || raw || `Gemini API returned ${upstream.status}`;
       return send(res, upstream.status, {
-        error:
-          `Gemini API ${upstream.status}: ${message}`
+        error: `Gemini API ${upstream.status}: ${message}`
       });
     }
 
     const text = (data?.candidates || [])
-      .flatMap(
-        c => c?.content?.parts || []
-      )
-      .map(
-        p => p?.text || ''
-      )
+      .flatMap(c => c?.content?.parts || [])
+      .map(p => p?.text || '')
       .join('');
 
-    return send(res, 200, {
-      text
-    });
-
+    return send(res, 200, { text });
   } catch (err) {
-    console.error(
-      'Gemini proxy error:',
-      err
-    );
-
+    console.error('Gemini proxy error:', err);
     return send(res, 500, {
-      error:
-        err?.message ||
-        'Gemini proxy failed.'
+      error: err?.message || 'Gemini proxy failed.'
     });
-
   } finally {
     if (oldPath || newPath) {
       try {
-        await del(
-          [oldPath, newPath]
-            .filter(Boolean)
-        );
+        await del([oldPath, newPath].filter(Boolean));
       } catch (cleanupError) {
-        console.error(
-          'Blob cleanup error:',
-          cleanupError
-        );
+        console.error('Blob cleanup error:', cleanupError);
       }
     }
   }
