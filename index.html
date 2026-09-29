@@ -633,7 +633,7 @@ async function extractPptx(buf){
 // ── Gemini PDF comparison ─────────────────────────────────────
 // PDF files are deliberately routed through Gemini. Non-PDF files never call the API.
 const GEMINI_MODEL='gemini-3.5-flash-lite';
-const GEMINI_API_KEY='AQ.Ab8RN6KStQapT4lTfrQbxaJwI_EOzZTgOPfizp1uZOIsahXe8g';
+const GEMINI_API_KEY='AQ.Ab8RN6LBQ8SFhy3linQWgEOEdKJBQiITrEYLuNnw6weC0KDX1w';
 const isPdfFile=f=>!!f&&f.name.toLowerCase().endsWith('.pdf');
 function fileToBase64(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>{const v=String(r.result||'');res(v.slice(v.indexOf(',')+1));};r.onerror=()=>rej(new Error('Could not read '+file.name));r.readAsDataURL(file);});}
 const GEMINI_SCHEMA={
@@ -666,8 +666,8 @@ async function callGeminiPdfCompare(oldFile,newFile){
     ]}],
     generationConfig:{responseMimeType:'application/json',responseSchema:GEMINI_SCHEMA,temperature:0}
   };
-  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`,{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,{
+    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)
   });
   const raw=await r.text();
   let j;try{j=JSON.parse(raw);}catch(e){throw new Error('Gemini returned an invalid response.');}
@@ -1201,111 +1201,63 @@ function renderPdfPane(container,content,side){
     });
   };
   const normalizeDomText=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\u2018\u2019`´]/g,"'").replace(/[\u2010-\u2015]/g,'-').replace(/[^\p{L}\p{N}\u20b9$%]+/gu,' ').trim();
-
-  // Build our own PDF text layer from PDF.js text items. This deliberately does
-  // not depend on renderTextLayer(), whose output/markup differs between PDF.js
-  // versions. Each item is positioned using the SAME viewport as the canvas.
-  async function buildExactPdfTextLayer(el,page,vp){
-    const tl=document.createElement('div');
-    tl.className='pdf-text-layer';
-    tl.style.cssText='position:absolute;inset:0;z-index:2;overflow:hidden;pointer-events:none;color:transparent';
-    const tc=await page.getTextContent();
-    const items=(tc.items||[]).filter(i=>i.str&&i.str.trim());
-    const nodes=[];
-    for(const it of items){
-      const tx=pdfjsLib.Util.transform(vp.transform,it.transform);
-      const fontHeight=Math.hypot(tx[2],tx[3])||Math.abs(it.height||10)*vp.scale||10;
-      const angle=Math.atan2(tx[1],tx[0]);
-      const div=document.createElement('div');
-      div.className='pdf-text-item';
-      div.textContent=it.str;
-      div.style.position='absolute';
-      div.style.left='0';
-      div.style.top='0';
-      div.style.transformOrigin='0 0';
-      div.style.whiteSpace='pre';
-      div.style.fontSize=fontHeight+'px';
-      div.style.lineHeight='1';
-      div.style.color='transparent';
-      div.style.opacity='0';
-      // PDF.js's combined viewport transform gives us the exact displayed
-      // baseline/orientation. The translate uses the transformed origin.
-      div.style.transform=`matrix(${tx[0]/fontHeight},${tx[1]/fontHeight},${tx[2]/fontHeight},${tx[3]/fontHeight},${tx[4]},${tx[5]})`;
-      tl.appendChild(div);
-      nodes.push(div);
-    }
-    el.appendChild(tl);
-    return {tl,nodes};
-  }
-
-  function nodeTokenRanges(node){
-    const raw=node.textContent||'';
-    const out=[];const re=/\S+/g;let m;
-    while((m=re.exec(raw)))out.push({node,start:m.index,end:m.index+m[0].length,raw:m[0],t:normalizeDomText(m[0])});
-    return out;
-  }
-
-  function addRectHighlight(pw,ch,rect){
-    const pr=pw.getBoundingClientRect();
-    if(rect.width<1||rect.height<1||pr.width<1||pr.height<1)return false;
-    const d=document.createElement('div');
-    d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;
-    d.style.cssText=`left:${Math.max(0,((rect.left-pr.left)/pr.width)*100-.15)}%;top:${Math.max(0,((rect.top-pr.top)/pr.height)*100-.1)}%;width:${Math.min(100,(rect.width/pr.width)*100+.3)}%;height:${Math.min(100,(rect.height/pr.height)*100+.2)}%`;
-    d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);
-    d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);
-    return true;
-  }
-
   const highlightTarget=async(pw,target,pageNo,chKey,ch)=>{
     if(!target)return false;
-    const layer=pw.querySelector('.pdf-text-layer');
-    if(!layer)return false;
-    const nodes=[...layer.querySelectorAll('.pdf-text-item')].filter(n=>(n.textContent||'').trim());
+    // PDF.js 3.x renderTextLayer creates DIVs (not SPANs). Support both so
+    // the highlight layer is based on the exact browser-rendered text layer.
+    const nodes=[...pw.querySelectorAll('.pdf-text-layer div, .pdf-text-layer span')]
+      .filter(n=>(n.textContent||'').trim() && n.getBoundingClientRect().width>0);
     if(!nodes.length)return false;
     const targetTokens=normalizeDomText(target).split(/\s+/).filter(Boolean);
     if(!targetTokens.length)return false;
 
+    const nodeTokens=nodes.map((n,i)=>({n,i,t:normalizeDomText(n.textContent)}));
     const flat=[];
-    nodes.forEach((node,ni)=>nodeTokenRanges(node).forEach(tok=>flat.push({...tok,ni})));
+    nodeTokens.forEach((x)=>{
+      const ts=x.t.split(/\s+/).filter(Boolean);
+      ts.forEach(t=>flat.push({node:x.n,t}));
+    });
 
-    const matches=(probe)=>{
-      for(let i=0;i<=flat.length-probe.length;i++){
-        let ok=true;
-        for(let j=0;j<probe.length;j++){
-          if(!fuzzyTokenEq(flat[i+j].t,probe[j])){ok=false;break;}
-        }
-        if(ok)return [i,i+probe.length-1];
+    // Find the requested text in the actual PDF.js text layer. This works
+    // even when PDF.js splits one sentence into many positioned divs.
+    let hitStart=-1,hitEnd=-1;
+    for(let i=0;i<=flat.length-targetTokens.length;i++){
+      let ok=true;
+      for(let j=0;j<targetTokens.length;j++){
+        if(!fuzzyTokenEq(flat[i+j].t,targetTokens[j])){ok=false;break;}
       }
-      return null;
-    };
-
-    let hit=matches(targetTokens);
-    // Long Gemini phrases sometimes differ only in line-breaking punctuation.
-    // Use a distinctive prefix/suffix, but still highlight the exact rendered
-    // text range rather than the whole page or an estimated PDF coordinate.
-    if(!hit && targetTokens.length>10){
-      hit=matches(targetTokens.slice(0,8))||matches(targetTokens.slice(-8));
+      if(ok){hitStart=i;hitEnd=i+targetTokens.length-1;break;}
     }
-    if(!hit)return false;
 
-    const [a,b]=hit;
-    let created=0;
-    for(let i=a;i<=b;){
-      const first=flat[i];const ni=first.ni;let j=i;
-      while(j+1<=b&&flat[j+1].ni===ni)j++;
-      const last=flat[j];
-      const range=document.createRange();
-      const textNode=first.node.firstChild;
-      if(!textNode){i=j+1;continue;}
-      range.setStart(textNode,first.start);
-      range.setEnd(textNode,last.end);
-      const rects=[...range.getClientRects()];
-      rects.forEach(r=>{if(addRectHighlight(pw,ch,r))created++;});
-      i=j+1;
+    // If exact token matching fails, progressively use a distinctive anchor
+    // (first/last 6 tokens) to survive PDF text extraction punctuation quirks.
+    if(hitStart<0 && targetTokens.length>8){
+      const probes=[targetTokens.slice(0,6),targetTokens.slice(-6)];
+      for(const probe of probes){
+        for(let i=0;i<=flat.length-probe.length;i++){
+          let ok=true;
+          for(let j=0;j<probe.length;j++)if(!fuzzyTokenEq(flat[i+j].t,probe[j])){ok=false;break;}
+          if(ok){hitStart=i;hitEnd=i+probe.length-1;break;}
+        }
+        if(hitStart>=0)break;
+      }
     }
-    return created>0;
+    if(hitStart<0)return false;
+
+    const used=new Set();
+    for(let i=hitStart;i<=hitEnd;i++){
+      const node=flat[i].node;
+      if(used.has(node))continue;
+      used.add(node);
+      const r=node.getBoundingClientRect(),pr=pw.getBoundingClientRect();
+      if(r.width<1||r.height<1||pr.width<1||pr.height<1)continue;
+      const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;
+      d.style.cssText=`left:${Math.max(0,((r.left-pr.left)/pr.width)*100-.15)}%;top:${Math.max(0,((r.top-pr.top)/pr.height)*100-.1)}%;width:${Math.min(100,(r.width/pr.width)*100+.3)}%;height:${Math.min(100,(r.height/pr.height)*100+.2)}%`;
+      d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);
+      d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);
+    }
+    return used.size>0;
   };
-
   const applyGeminiToPage=async(pw,pageIndex)=>{
     if(pw.dataset.geminiApplied==='1')return;
     pw.dataset.geminiApplied='1';
@@ -1314,30 +1266,38 @@ function renderPdfPane(container,content,side){
       const pageHint=side==='old'?ch.oldPageHint:ch.newPageHint;
       if(!target)continue;
       if(pageHint>0&&pageHint-1!==pageIndex)continue;
-      let found=await highlightTarget(pw,target,pageIndex,side,ch);
+      let found=await highlightTarget(pw,target,pageIndex,ch,side);
       if(!found){
         const anchor=side==='old'?ch.oldAnchorText:ch.newAnchorText;
-        if(anchor&&anchor!==target)found=await highlightTarget(pw,anchor,pageIndex,side,ch);
+        if(anchor&&anchor!==target)found=await highlightTarget(pw,anchor,pageIndex,ch,side);
       }
       if(!found){
-        // Last resort only. This is restricted to the exact page and change.
+        // Absolute last resort: use the extracted PDF coordinates for this exact change.
+        // Normally Gemini text is located against the real PDF.js text layer above.
         const boxes=(ch[boxKey]||[]).filter(x=>x.p===pageIndex);
-        boxes.forEach(({b})=>{
-          const pr=pw.getBoundingClientRect();
-          const r={left:pr.left+b[0]*pr.width,top:pr.top+b[1]*pr.height,width:(b[2]-b[0])*pr.width,height:(b[3]-b[1])*pr.height};
-          addRectHighlight(pw,ch,r);
-        });
+        boxes.forEach(({p,b})=>{const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;d.style.cssText=`left:${b[0]*100-.15}%;top:${b[1]*100-.1}%;width:${(b[2]-b[0])*100+.3}%;height:${(b[3]-b[1])*100+.2}%`;d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);});
       }
     }
   };
-
   const draw=async el=>{
     if(el.dataset.done)return;el.dataset.done='1';
     try{
       const page=await content.pdfDoc.getPage(+el.dataset.page+1),vp=page.getViewport({scale:1.6});
       const cv=document.createElement('canvas');cv.width=vp.width;cv.height=vp.height;cv.style.cssText='position:absolute;inset:0;width:100%;height:100%;z-index:1';
       await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;el.insertBefore(cv,el.firstChild);
-      await buildExactPdfTextLayer(el,page,vp);
+      const tl=document.createElement('div');tl.className='pdf-text-layer';tl.style.cssText='position:absolute;inset:0;z-index:2;overflow:hidden;pointer-events:none';el.appendChild(tl);
+      const tc=await page.getTextContent();
+      if(window.pdfjsLib.renderTextLayer){
+        const task=window.pdfjsLib.renderTextLayer({textContentSource:tc,container:tl,viewport:vp,textDivs:[]});
+        if(task?.promise)await task.promise;
+      }else{
+        // PDF.js fallback: create positioned transparent spans from text items.
+        tc.items.filter(i=>i.str&&i.str.trim()).forEach(it=>{
+          const span=document.createElement('span');span.textContent=it.str;span.style.position='absolute';span.style.color='transparent';span.style.whiteSpace='pre';
+          const t=it.transform;const pt=vp.convertToViewportPoint(t[4],t[5]);const fs=Math.hypot(t[2],t[3])*vp.scale;
+          span.style.left=pt[0]+'px';span.style.top=(pt[1]-fs)+'px';span.style.fontSize=fs+'px';span.style.transformOrigin='0 0';tl.appendChild(span);
+        });
+      }
       el.dataset.textReady='1';
       if(S.oldContent?.type==='pdf'&&S.newContent?.type==='pdf')await applyGeminiToPage(el,+el.dataset.page);
       else addLegacyOverlays();
