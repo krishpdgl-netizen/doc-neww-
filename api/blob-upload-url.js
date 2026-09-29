@@ -1,8 +1,8 @@
 const { issueSignedToken, presignUrl } = require('@vercel/blob');
-const crypto = require('crypto');
+const { randomUUID } = require('crypto');
 
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
-const TOKEN_TTL_MS = 15 * 60 * 1000;
+const TTL_MS = 15 * 60 * 1000;
 
 function send(res, status, body) {
   return res.status(status).json(body);
@@ -32,10 +32,8 @@ module.exports = async function handler(req, res) {
   try {
     const body = parseBody(req);
 
-    const originalName = String(body.name || 'document.pdf');
-
     const name =
-      originalName
+      String(body.name || 'document.pdf')
         .replace(/[^a-zA-Z0-9._-]/g, '_')
         .slice(-100) || 'document.pdf';
 
@@ -61,27 +59,27 @@ module.exports = async function handler(req, res) {
     }
 
     const pathname =
-      `doc-compare/${Date.now()}-${crypto.randomUUID()}-${name}`;
+      `doc-compare/${Date.now()}-${randomUUID()}-${name}`;
 
-    /*
-     * Create a token scoped ONLY to this exact pathname
-     * and ONLY to PUT.
-     */
+    const validUntil = Date.now() + TTL_MS;
+
+    // Scope the delegation to this exact pathname and PUT operation.
     const token = await issueSignedToken({
       pathname,
-      operations: ['put']
+      operations: ['put'],
+      validUntil
     });
 
     const { presignedUrl } = await presignUrl(token, {
       pathname,
       operation: 'put',
-      validUntil: Date.now() + TOKEN_TTL_MS
+      validUntil
     });
 
     return send(res, 200, {
       uploadUrl: presignedUrl,
       pathname,
-      expiresAt: Date.now() + TOKEN_TTL_MS
+      expiresAt: validUntil
     });
 
   } catch (err) {
@@ -93,7 +91,7 @@ module.exports = async function handler(req, res) {
         'Could not create secure private Blob upload URL.',
 
       hint:
-        'Verify that this Vercel project is connected to the intended private Blob store and that Blob OIDC or BLOB_READ_WRITE_TOKEN is available to the deployment.'
+        'Make sure the Vercel project is connected to the intended private Blob store and the deployment has Blob OIDC or BLOB_READ_WRITE_TOKEN access.'
     });
   }
 };
