@@ -1,6 +1,6 @@
 const { issueSignedToken, presignUrl } = require('@vercel/blob');
 
-const DELETE_URL_TTL_MS = 5 * 60 * 1000;
+const TTL_MS = 60 * 1000;
 
 function send(res, status, body) {
   return res.status(status).json(body);
@@ -32,27 +32,30 @@ async function deleteOne(pathname) {
     };
   }
 
-  /*
-   * Generate a short-lived DELETE URL scoped
-   * to this exact object.
-   */
+  const validUntil = Date.now() + TTL_MS;
+
   const token = await issueSignedToken({
     pathname,
-    operations: ['delete']
+    operations: ['delete'],
+    validUntil
   });
 
   const { presignedUrl } = await presignUrl(token, {
     pathname,
     operation: 'delete',
-    validUntil: Date.now() + DELETE_URL_TTL_MS
+    validUntil
   });
 
-  const response = await fetch(presignedUrl, {
-    method: 'DELETE'
-  });
+  const response = await fetch(
+    presignedUrl,
+    {
+      method: 'DELETE'
+    }
+  );
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
+  if (!response.ok && response.status !== 404) {
+    const text =
+      await response.text().catch(() => '');
 
     throw new Error(
       `Blob delete failed for ${pathname}: HTTP ${response.status}` +
@@ -62,7 +65,7 @@ async function deleteOne(pathname) {
 
   return {
     pathname,
-    deleted: true
+    deleted: response.status !== 404
   };
 }
 
@@ -85,7 +88,9 @@ module.exports = async function handler(req, res) {
     const results = [];
 
     for (const pathname of paths) {
-      results.push(await deleteOne(pathname));
+      results.push(
+        await deleteOne(pathname)
+      );
     }
 
     return send(res, 200, {
