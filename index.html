@@ -237,12 +237,6 @@ mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0
 .pdf-text-layer{position:absolute;inset:0;z-index:2;overflow:hidden;line-height:1;pointer-events:none}
 .pdf-text-layer div,.pdf-text-layer span{position:absolute;white-space:pre;transform-origin:0 0;color:transparent!important;background:transparent!important;user-select:none}
 .pdf-text-layer .highlight-hit{color:transparent}
-.gemini-note{font-size:10px;color:var(--purple);margin-top:8px;line-height:1.4}
-.gemini-key-row{display:none;align-items:center;gap:8px;margin-top:12px}
-.gemini-key-row.on{display:flex}
-.gemini-key-input{flex:1;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 9px;font-size:11px;outline:none}
-.gemini-key-input:focus{border-color:var(--blue)}
-
 /* detail panel */
 #detail{border-top:1px solid var(--border);background:var(--panel);flex-shrink:0;overflow-y:auto;max-height:200px}
 .detail-empty{display:flex;align-items:center;justify-content:center;height:72px;color:var(--text3);font-size:12px;gap:6px}
@@ -349,12 +343,6 @@ mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0
               <div class="chip" data-grp="watch">Names</div>
             </div>
           </div>
-          <div class="gemini-key-row" id="gemini-key-row">
-            <span class="config-title" style="margin:0;white-space:nowrap">Gemini API key</span>
-            <input id="gemini-key-input" class="gemini-key-input" type="password" autocomplete="off" placeholder="Required when comparing PDFs">
-            <button class="btn" id="gemini-key-clear" type="button">Clear</button>
-          </div>
-          <div class="gemini-note" id="gemini-note" style="display:none">PDF-to-PDF comparisons use Gemini document understanding. Other file types keep the existing local comparison engine.</div>
         </div>
       </div>
       <div class="up-actions">
@@ -645,14 +633,8 @@ async function extractPptx(buf){
 // ── Gemini PDF comparison ─────────────────────────────────────
 // PDF files are deliberately routed through Gemini. Non-PDF files never call the API.
 const GEMINI_MODEL='gemini-3.5-flash-lite';
-const GEMINI_KEY_STORE='diffiq_gemini_api_key';
+const GEMINI_API_KEY='AQ.Ab8RN6LBQ8SFhy3linQWgEOEdKJBQiITrEYLuNnw6weC0KDX1w';
 const isPdfFile=f=>!!f&&f.name.toLowerCase().endsWith('.pdf');
-function getGeminiKey(){
-  let k='';try{k=sessionStorage.getItem(GEMINI_KEY_STORE)||'';}catch(e){}
-  return k.trim();
-}
-function setGeminiKey(k){try{sessionStorage.setItem(GEMINI_KEY_STORE,k.trim());}catch(e){}}
-function clearGeminiKey(){try{sessionStorage.removeItem(GEMINI_KEY_STORE);}catch(e){};const i=$('gemini-key-input');if(i)i.value='';}
 function fileToBase64(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>{const v=String(r.result||'');res(v.slice(v.indexOf(',')+1));};r.onerror=()=>rej(new Error('Could not read '+file.name));r.readAsDataURL(file);});}
 const GEMINI_SCHEMA={
   type:'object',
@@ -670,10 +652,8 @@ const GEMINI_SCHEMA={
 const GEMINI_PROMPT=`You are the document-diff engine for a professional document comparison application. Compare the OLD PDF and UPDATED PDF exactly as documents, not as summaries. Identify every meaningful textual/content change: additions, deletions, replacements/modifications, and moved text. Ignore purely visual rendering differences, font rasterization, tiny spacing differences, and page reflow unless the underlying content changed.\n\nCRITICAL RULES:\n1. old_text and new_text MUST reproduce the exact visible wording from the corresponding PDF, preserving numbers, dates, names, punctuation, and wording. Do not paraphrase.\n2. For an added change, old_text must be empty. For a deleted change, new_text must be empty. For a modified change, provide both exact old and exact new text.\n3. Keep each change reasonably local (normally a word, phrase, sentence, paragraph, table cell, or clause), not an entire document.\n4. old_page and new_page are 1-based page numbers. Use 0 when a side has no corresponding page.\n5. old_anchor and new_anchor must be exact short text snippets (10-80 characters) copied from the relevant PDF that make the changed location easy to find. Never invent them. For one-sided changes, the missing side anchor is empty.\n6. Do not report the same underlying change twice merely because it appears in a header/footer or page reflow.\n7. Be exhaustive: inspect every page, including tables and repeated legal clauses.\nReturn ONLY JSON matching the supplied schema.`;
 
 async function callGeminiPdfCompare(oldFile,newFile){
-  let key=getGeminiKey();
-  const input=$('gemini-key-input');
-  if(!key&&input?.value?.trim()){key=input.value.trim();setGeminiKey(key);}
-  if(!key)throw new Error('PDF comparison requires a Gemini API key. Enter it in the Gemini API key field.');
+  const key=GEMINI_API_KEY;
+  if(!key)throw new Error('Gemini API key is not configured in the application code.');
   if(!isPdfFile(oldFile)||!isPdfFile(newFile))throw new Error('Gemini PDF mode currently requires both files to be PDFs. Non-PDF comparisons continue to use the existing engine.');
   const detail=$('prog-detail');
   if(detail)detail.textContent='Gemini is reading both PDFs and comparing their actual document content…';
@@ -1033,17 +1013,6 @@ function attach(f,key,fnEl,dz){
 setupDZ('dz-old','fi-old','fn-old','oldFile');
 setupDZ('dz-new','fi-new','fn-new','newFile');
 
-function refreshGeminiUi(){
-  const onPdf=isPdfFile(S.oldFile)&&isPdfFile(S.newFile);
-  const row=$('gemini-key-row'),note=$('gemini-note'),input=$('gemini-key-input');
-  if(row)row.classList.toggle('on',onPdf);
-  if(note)note.style.display=onPdf?'block':'none';
-  if(input&&!input.value)input.value=getGeminiKey();
-}
-$('gemini-key-clear')?.addEventListener('click',clearGeminiKey);
-$('gemini-key-input')?.addEventListener('change',e=>setGeminiKey(e.target.value));
-const _attach=attach;
-attach=function(f,key,fnEl,dz){_attach(f,key,fnEl,dz);refreshGeminiUi();};
 
 document.querySelectorAll('[data-grp="sens"]').forEach(el=>{
   el.addEventListener('click',()=>{
