@@ -39,18 +39,16 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    const pathname =
-      `doc-compare/${Date.now()}-${crypto.randomUUID()}-${name}`;
+    const pathname = `doc-compare/${Date.now()}-${crypto.randomUUID()}-${name}`;
 
     const token = await issueSignedToken({
       operations: ['put']
     });
 
-    // FIX: Explicitly set access to 'private' to match the read request in gemini.js
     const { presignedUrl } = await presignUrl(token, {
       pathname,
       operation: 'put',
-      access: 'private', // <--- ADDED THIS LINE
+      access: 'private', // <-- CRITICAL FIX: Must match the 'private' read access in gemini.js
       validUntil: Date.now() + 15 * 60 * 1000
     });
 
