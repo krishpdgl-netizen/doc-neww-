@@ -633,7 +633,7 @@ async function extractPptx(buf){
 // ── Gemini PDF comparison ─────────────────────────────────────
 // PDF files are deliberately routed through Gemini. Non-PDF files never call the API.
 const GEMINI_MODEL='gemini-3.5-flash-lite';
-const GEMINI_API_KEY='AQ.Ab8RN6LBQ8SFhy3linQWgEOEdKJBQiITrEYLuNnw6weC0KDX1w';
+const GEMINI_API_KEY='AQ.Ab8RN6KStQapT4lTfrQbxaJwI_EOzZTgOPfizp1uZOIsahXe8g';
 const isPdfFile=f=>!!f&&f.name.toLowerCase().endsWith('.pdf');
 function fileToBase64(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>{const v=String(r.result||'');res(v.slice(v.indexOf(',')+1));};r.onerror=()=>rej(new Error('Could not read '+file.name));r.readAsDataURL(file);});}
 const GEMINI_SCHEMA={
@@ -666,8 +666,8 @@ async function callGeminiPdfCompare(oldFile,newFile){
     ]}],
     generationConfig:{responseMimeType:'application/json',responseSchema:GEMINI_SCHEMA,temperature:0}
   };
-  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,{
-    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)
+  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`,{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
   });
   const raw=await r.text();
   let j;try{j=JSON.parse(raw);}catch(e){throw new Error('Gemini returned an invalid response.');}
