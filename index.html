@@ -832,193 +832,112 @@ async function uploadPdfToBlob(file){
 }
 
 async function callGeminiPdfCompare(oldFile,newFile){
-  const prompt=`Compare the ORIGINAL PDF and UPDATED PDF as a precise document-diff engine.
-Return ONLY valid JSON matching this schema: {"changes":[{"type":"added|deleted|modified|moved","oldText":"","newText":"","oldPage":1,"newPage":1}]}.
-Identify substantive textual changes, additions, deletions and moved passages. Ignore font, spacing, line wrapping, page breaks and PDF rendering artifacts unless the actual content changed.
-CRITICAL LOCATION RULE: oldText and newText MUST be copied EXACTLY from the corresponding PDF, preserving the actual words and order. Do not paraphrase, summarize, normalize, or describe the change. Prefer the SHORTEST contiguous phrase that uniquely identifies the changed wording. Do not return an entire paragraph when only a few words changed. The returned phrase must occur verbatim as a contiguous sequence of words in that PDF.
-For modified text, oldText is the exact old phrase and newText is the exact replacement phrase. For additions oldText is empty and newText is the exact added phrase. For deletions newText is empty and oldText is the exact deleted phrase. Use 1-based page numbers. Do not duplicate changes. If the same wording occurs multiple times, choose the occurrence on the page where the change actually appears.`;
+  const prompt=`Compare the ORIGINAL PDF and UPDATED PDF as a visual document-diff engine.
+Return ONLY valid JSON matching this schema:
+{"changes":[{"type":"added|deleted|modified|moved","oldText":"","newText":"","oldPage":1,"newPage":1,"oldBoxes":[[ymin,xmin,ymax,xmax]],"newBoxes":[[ymin,xmin,ymax,xmax]]}]}
+
+CRITICAL COORDINATE RULES:
+- The PDFs are supplied as visual documents. Inspect the rendered page layout, not just extracted text.
+- For EVERY change, return the exact visible region(s) containing the changed text.
+- Coordinates must be normalized to 0..1000 and use [ymin, xmin, ymax, xmax].
+- Coordinates are relative to the FULL PAGE, not to a paragraph, text block, or crop.
+- oldBoxes belong to the ORIGINAL PDF and newBoxes belong to the UPDATED PDF.
+- Use one box per changed line/region when a change wraps across multiple lines.
+- For added changes, oldBoxes must be [] and newBoxes must identify the added text.
+- For deleted changes, newBoxes must be [] and oldBoxes must identify the deleted text.
+- For modified changes, provide both sets of boxes.
+- For moved changes, provide the source and destination boxes.
+- Do not invent boxes. If you cannot visually locate a change, omit that change.
+
+TEXT RULES:
+- oldText and newText must be copied EXACTLY from the PDFs. Never paraphrase.
+- Keep each change focused on the smallest meaningful changed phrase or sentence.
+- Do not return an entire paragraph when only a company name, number, date, clause, or phrase changed.
+- Ignore font, spacing, line wrapping, page breaks and rendering artifacts unless actual content changed.
+- Do not report unchanged repeated words merely because they occur elsewhere.
+- Use 1-based page numbers.
+- Do not duplicate changes.
+
+Accuracy is more important than completeness. A missing change is preferable to a wrong coordinate.`;
 
   let oldPath=null,newPath=null;
   try{
-    // Upload directly from browser to Blob. The browser never receives the Blob store credential.
-    [oldPath,newPath]=await Promise.all([uploadPdfToBlob(oldFile),uploadPdfToBlob(newFile)]);
+    [oldPath,newPath]=await Promise.all([
+      uploadPdfToBlob(oldFile),
+      uploadPdfToBlob(newFile)
+    ]);
 
-    const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),150000);
+    const ctl=new AbortController();
+    const tm=setTimeout(()=>ctl.abort(),180000);
+
     const resp=await fetch('/api/gemini',{
-      method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      signal:ctl.signal,
       body:JSON.stringify({model:GEMINI_MODEL,prompt,oldPath,newPath})
-    }).catch(e=>{throw new Error(e.name==='AbortError'?'AI check timed out':e.message);}).finally(()=>clearTimeout(tm));
-    const raw=await resp.text(); let payload={}; try{payload=JSON.parse(raw);}catch(e){}
+    }).catch(e=>{
+      throw new Error(e.name==='AbortError'?'AI check timed out':e.message);
+    }).finally(()=>clearTimeout(tm));
+
+    const raw=await resp.text();
+    let payload={};
+    try{payload=JSON.parse(raw);}catch(e){}
     if(!resp.ok)throw new Error(payload.error||`Gemini server request failed (${resp.status}).`);
+
     const parsed=parseGeminiJson(payload.text||'');
     return Array.isArray(parsed)?parsed:(parsed.changes||[]);
   }finally{
-    // Gemini endpoint deletes the temporary blobs after reading them. If the
-    // request fails before it reaches Gemini, best-effort cleanup is attempted here.
     if(oldPath||newPath){
-      fetch('/api/blob-delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths:[oldPath,newPath].filter(Boolean)})}).catch(()=>{});
+      fetch('/api/blob-delete',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({paths:[oldPath,newPath].filter(Boolean)})
+      }).catch(()=>{});
     }
   }
 }
 
-/*
- * Gemini location engine
- * -----------------------
- * Never map a Gemini phrase to a whole "similar" block. Legal documents
- * repeat words constantly, so block-level fuzzy matching can put a correct
- * Gemini result on the wrong occurrence (often at the top/right of a page).
- *
- * Instead we flatten the REAL PDF words, preserve their page/box coordinates,
- * and locate Gemini's exact wording as a contiguous word sequence. Only a
- * high-confidence fuzzy sequence match is allowed as an OCR fallback.
- */
-function geminiTokens(text){
-  return String(text||'')
-    .split(/\s+/)
-    .map(normWord)
-    .filter(Boolean);
+function geminiVisualBox(box){
+  if(!Array.isArray(box)||box.length!==4)return null;
+  const nums=box.map(Number);
+  if(nums.some(n=>!Number.isFinite(n)))return null;
+  // Gemini returns PDF/image boxes as [ymin,xmin,ymax,xmax] in 0..1000 space.
+  let [y0,x0,y1,x1]=nums;
+  x0=Math.max(0,Math.min(1000,x0));
+  x1=Math.max(0,Math.min(1000,x1));
+  y0=Math.max(0,Math.min(1000,y0));
+  y1=Math.max(0,Math.min(1000,y1));
+  if(x1<=x0||y1<=y0)return null;
+  return [x0/1000,y0/1000,x1/1000,y1/1000];
 }
 
-function buildPageWordIndex(blocks){
-  const byPage=new Map();
-  blocks.forEach((block,bi)=>{
-    const page=Number.isFinite(block.page)?block.page:0;
-    if(!byPage.has(page))byPage.set(page,[]);
-    for(const word of (block.words||[])){
-      const k=normWord(word.t||'');
-      if(!k)continue;
-      byPage.get(page).push({
-        word,
-        blockIndex:bi,
-        key:k,
-        page
-      });
-    }
-  });
-  return byPage;
+function geminiVisualBoxes(raw,pageNumber){
+  if(!Array.isArray(raw))return [];
+  const p=Math.max(0,Number(pageNumber||1)-1);
+  return raw.map(geminiVisualBox).filter(Boolean).map(b=>({p,b}));
 }
 
-function sequenceExactScore(window,tokens){
-  if(window.length!==tokens.length)return 0;
-  let hit=0;
-  for(let i=0;i<tokens.length;i++){
-    if(window[i].key===tokens[i])hit++;
-  }
-  return tokens.length?hit/tokens.length:0;
-}
-
-function sequenceFuzzyScore(window,tokens){
-  if(window.length!==tokens.length||!tokens.length)return 0;
-  let total=0;
-  for(let i=0;i<tokens.length;i++){
-    const a=window[i].key,b=tokens[i];
-    if(a===b)total+=1;
-    else if(a.length>=4&&b.length>=4)total+=dice(a,b);
-  }
-  return total/tokens.length;
-}
-
-function findGeminiSequence(blocks,text,pageHint){
-  const tokens=geminiTokens(text);
-  if(!tokens.length)return null;
-
-  const pageIndex=buildPageWordIndex(blocks);
-  const pages=[...pageIndex.keys()]
-    .filter(p=>pageHint==null||p===pageHint);
-
-  // Exact contiguous match is mandatory whenever possible.
-  for(const page of pages){
-    const words=pageIndex.get(page)||[];
-    if(tokens.length>words.length)continue;
-    for(let i=0;i<=words.length-tokens.length;i++){
-      let ok=true;
-      for(let j=0;j<tokens.length;j++){
-        if(words[i+j].key!==tokens[j]){ok=false;break;}
-      }
-      if(ok){
-        const hit=words.slice(i,i+tokens.length);
-        return {
-          words:hit.map(x=>x.word),
-          blockIdxs:[...new Set(hit.map(x=>x.blockIndex))],
-          page,
-          score:1,
-          exact:true
-        };
-      }
-    }
-  }
-
-  // OCR can alter one or two words. Use a conservative fuzzy window only
-  // when the page-constrained exact search failed.
-  let best=null;
-  for(const page of pages){
-    const words=pageIndex.get(page)||[];
-    if(tokens.length>words.length)continue;
-    for(let i=0;i<=words.length-tokens.length;i++){
-      const win=words.slice(i,i+tokens.length);
-      const score=sequenceFuzzyScore(win,tokens);
-      if(!best||score>best.score){
-        best={words:win.map(x=>x.word),blockIdxs:[...new Set(win.map(x=>x.blockIndex))],page,score,exact:false};
-      }
-    }
-  }
-
-  // Do NOT accept a loose 35% block match. That was the source of the
-  // staircase/top-of-page false highlights. OCR fallback must be very strong.
-  return best&&best.score>=0.88?best:null;
-}
-
-function findGeminiBlocks(blocks,text,pageHint){
-  const hit=findGeminiSequence(blocks,text,pageHint);
-  return hit?hit.blockIdxs:[];
-}
-
-function wordsMatchingText(blocks,idxs,text,pageHint){
-  const hit=findGeminiSequence(blocks,text,pageHint);
-  return hit?hit.words:[];
-}
-
-function geminiChangesToLocal(gChanges,ob,nb){
+function geminiVisualChanges(gChanges,ob,nb){
   const out=[];
-
   for(const g of gChanges||[]){
     const type=['added','deleted','modified','moved'].includes(g.type)?g.type:'modified';
     const oldText=String(g.oldText||'').trim();
     const newText=String(g.newText||'').trim();
     if(!oldText&&!newText)continue;
 
+    const oldBoxes=geminiVisualBoxes(g.oldBoxes,g.oldPage);
+    const newBoxes=geminiVisualBoxes(g.newBoxes,g.newPage);
+
+    // Never create a fake highlight. Gemini must provide a real visual box.
+    if(!oldBoxes.length&&!newBoxes.length)continue;
+
     const op=Number.isFinite(+g.oldPage)?Math.max(0,+g.oldPage-1):null;
     const np=Number.isFinite(+g.newPage)?Math.max(0,+g.newPage-1):null;
 
-    const oldHit=oldText?findGeminiSequence(ob,oldText,op):null;
-    const newHit=newText?findGeminiSequence(nb,newText,np):null;
+    const oldIdxs=op!=null?ob.blocks.map((b,i)=>b.page===op?i:-1).filter(i=>i>=0):[];
+    const newIdxs=np!=null?nb.blocks.map((b,i)=>b.page===np?i:-1).filter(i=>i>=0):[];
 
-    // If Gemini supplied a page and exact location failed, try all pages once.
-    // Still require exact/high-confidence contiguous matching.
-    const oldHit2=!oldHit&&oldText?findGeminiSequence(ob,oldText,null):null;
-    const newHit2=!newHit&&newText?findGeminiSequence(nb,newText,null):null;
-    const oh=oldHit||oldHit2;
-    const nh=newHit||newHit2;
-
-    const rmWords=oh?oh.words:[];
-    const addWords=nh?nh.words:[];
-    const oi=oh?oh.blockIdxs:[];
-    const ni=nh?nh.blockIdxs:[];
-
-    // Never manufacture a PDF highlight from an unlocated Gemini statement.
-    if((oldText&&!rmWords.length)||(newText&&!addWords.length))continue;
-
-    const cl=classifyChange(
-      oldText,
-      newText,
-      oldText,
-      newText,
-      type
-    );
-
-    const confs=[...rmWords,...addWords]
-      .map(w=>w.conf)
-      .filter(c=>typeof c==='number');
+    const cl=classifyChange(oldText,newText,oldText,newText,type);
 
     out.push({
       id:out.length+1,
@@ -1027,24 +946,61 @@ function geminiChangesToLocal(gChanges,ob,nb){
       newText,
       rmText:oldText,
       addText:newText,
-      rmWords,
-      addWords,
-      oldIdxs:oi,
-      newIdxs:ni,
-      oldIdx:oi.length?oi[0]:-1,
-      newIdx:ni.length?ni[0]:-1,
-      oldBoxes:boxesOf(rmWords),
-      newBoxes:boxesOf(addWords),
-      oldAnchor:oh?anchorOf(ob,oi,oi[0]??0):null,
-      newAnchor:nh?anchorOf(nb,ni,ni[0]??0):null,
-      page:nh?.page??oh?.page??0,
-      ocr:[...oi.map(i=>ob[i]),...ni.map(i=>nb[i])].some(b=>b?.ocr),
-      conf:confs.length?Math.round(Math.min(...confs)):null,
+      rmWords:[],
+      addWords:[],
+      oldIdxs,
+      newIdxs,
+      oldIdx:oldIdxs[0]??-1,
+      newIdx:newIdxs[0]??-1,
+      oldBoxes,
+      newBoxes,
+      oldAnchor:oldBoxes[0]||null,
+      newAnchor:newBoxes[0]||null,
+      page:newBoxes[0]?.p??oldBoxes[0]?.p??0,
+      ocr:false,
+      conf:null,
+      ...cl,
       gemini:true,
-      locationScore:Math.round(Math.min(1,Math.max(0,oh?.score??nh?.score??0))*100)
+      visualGemini:true
     });
   }
+  out.forEach((c,i)=>c.id=i+1);
+  return out;
+}
 
+function findGeminiBlocks(blocks,text,pageHint){
+  const target=String(text||'').split(/\s+/).map(normWord).filter(Boolean).join(' '); if(!target)return [];
+  const toks=target.split(/\s+/); let best=-1,bestScore=0;
+  for(let i=0;i<blocks.length;i++){
+    if(pageHint!=null&&blocks[i].page!==pageHint)continue;
+    const bk=blocks[i].key;
+    if(bk.includes(target)||target.includes(bk))return [i];
+    const bw=new Set(bk.split(/\s+/)); let hits=0; for(const t of toks)if(bw.has(t))hits++;
+    const score=hits/Math.max(toks.length,bk.split(/\s+/).length); if(score>bestScore){bestScore=score;best=i;}
+  }
+  if(best<0||bestScore<0.35){best=-1;bestScore=0;for(let i=0;i<blocks.length;i++){const score=dice(blocks[i].key,target);if(score>bestScore){bestScore=score;best=i;}}}
+  return best>=0&&bestScore>=0.35?[best]:[];
+}
+function wordsMatchingText(blocks,idxs,text){
+  const target=String(text||'').split(/\s+/).map(normWord).filter(Boolean); if(!target.length)return [];
+  const out=[];let ti=0;
+  for(const bi of idxs)for(const w of blocks[bi]?.words||[]){if(ti>=target.length)break;if(w.k===target[ti]||dice(w.k,target[ti])>=0.86){out.push(w);ti++;}}
+  if(ti<Math.max(1,Math.floor(target.length*.55))){const set=new Set(target);return idxs.flatMap(i=>(blocks[i]?.words||[]).filter(w=>set.has(w.k)));}
+  return out;
+}
+function geminiChangesToLocal(gChanges,ob,nb){
+  const out=[];
+  for(const g of gChanges){
+    const type=['added','deleted','modified','moved'].includes(g.type)?g.type:'modified';
+    const oldText=String(g.oldText||'').trim(),newText=String(g.newText||'').trim(); if(!oldText&&!newText)continue;
+    const op=Number.isFinite(+g.oldPage)?Math.max(0,+g.oldPage-1):null,np=Number.isFinite(+g.newPage)?Math.max(0,+g.newPage-1):null;
+    let oi=oldText?findGeminiBlocks(ob,oldText,op):[],ni=newText?findGeminiBlocks(nb,newText,np):[];
+    if(!oi.length&&oldText)oi=findGeminiBlocks(ob,oldText,null); if(!ni.length&&newText)ni=findGeminiBlocks(nb,newText,null);
+    const rmWords=oldText?wordsMatchingText(ob,oi,oldText):[],addWords=newText?wordsMatchingText(nb,ni,newText):[];
+    const cl=classifyChange(oldText,newText,oldText,newText,type),confs=[...rmWords,...addWords].map(w=>w.conf).filter(c=>typeof c==='number');
+    out.push({id:out.length+1,type,oldText,newText,rmText:oldText,addText:newText,rmWords,addWords,oldIdxs:oi,newIdxs:ni,oldIdx:oi[0]??-1,newIdx:ni[0]??-1,
+      oldBoxes:boxesOf(rmWords),newBoxes:boxesOf(addWords),oldAnchor:anchorOf(ob,oi,0),newAnchor:anchorOf(nb,ni,0),page:ni[0]??oi[0]??0,ocr:[...oi.map(i=>ob[i]),...ni.map(i=>nb[i])].some(b=>b?.ocr),conf:confs.length?Math.round(Math.min(...confs)):null,...cl,gemini:true});
+  }
   return out;
 }
 
@@ -1411,29 +1367,28 @@ async function runCompare(){
     setStage(3);
     await new Promise(r=>setTimeout(r,0));
     S.aiNote='';
-    if(oc.type==='pdf'&&nc.type==='pdf'){
-      // For PDF ↔ PDF, Gemini is the semantic source of truth. PDF.js supplies
-      // the real word boxes used for highlighting. We deliberately do NOT mix
-      // the old block-level local PDF diff into the visible PDF highlights,
-      // because repeated legal-document wording can make that alignment drift.
-      S.changes=[];
-      setStage(4,'AI document check','Sending both PDFs to Gemini and locating each exact changed phrase…');
+    const bothPdf=oc.type==='pdf'&&nc.type==='pdf';
+    S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
+
+    // PDF ↔ PDF: Gemini is the visual source of truth for both WHAT changed
+    // and WHERE it changed. The local PDF diff is retained only as a fallback
+    // if Gemini is unavailable or returns no visually locatable changes.
+    if(bothPdf){
+      setStage(4,'AI visual comparison','Gemini is comparing the PDF pages and locating each change visually…');
       try{
         const gc=await callGeminiPdfCompare(S.oldFile,S.newFile);
-        const ai=geminiChangesToLocal(gc,oc.blocks,nc.blocks);
-        S.changes=ai;
-        S.aiNote=ai.length?`AI identified ${ai.length} verified change${ai.length===1?'':'s'}`:'AI check: no textual changes';
+        const visual=geminiVisualChanges(gc,oc,nc);
+        if(visual.length){
+          S.changes=visual;
+          S.aiNote=`Gemini visual comparison: ${visual.length} change${visual.length===1?'':'s'} located`;
+        }else{
+          S.aiNote='Gemini found no safely locatable visual changes';
+        }
       }catch(e){
-        console.warn('Gemini PDF comparison failed:',e);
-        // Do not display potentially mislocated local PDF highlights.
-        S.changes=[];
-        S.aiNote='AI check failed';
+        console.warn('Gemini visual check failed:',e);
+        S.aiNote='AI visual check unavailable: local result shown';
         S.aiErr=e.message;
-        throw new Error(`PDF comparison could not be verified by Gemini: ${e.message}`);
       }
-    }else{
-      // Non-PDF behaviour stays on the existing local comparison engine.
-      S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
     }
 
     // Stage 4-5: Classify
