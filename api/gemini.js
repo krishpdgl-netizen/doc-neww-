@@ -1,10 +1,20 @@
-const { issueSignedToken, presignUrl } = require('@vercel/blob');
+const {
+  issueSignedToken,
+  presignUrl
+} = require('@vercel/blob');
 
-const MODEL_DEFAULT = 'gemini-3.5-flash-lite';
+const MODEL_DEFAULT =
+  process.env.GEMINI_MODEL ||
+  'gemini-3.1-flash-lite';
 
-const MAX_PDF_BYTES = 50 * 1024 * 1024;
+const MAX_PDF_BYTES =
+  50 * 1024 * 1024;
 
-const READ_URL_TTL_MS = 5 * 60 * 1000;
+const READ_TTL_MS =
+  5 * 60 * 1000;
+
+const DELETE_TTL_MS =
+  60 * 1000;
 
 function send(res, status, body) {
   return res.status(status).json(body);
@@ -26,15 +36,11 @@ function parseBody(req) {
 
 
 /*
- * Read a PRIVATE Vercel Blob through a short-lived
- * signed GET URL.
+ * Read the exact private Blob object through
+ * a short-lived signed GET URL.
  *
- * We intentionally do NOT use:
- *
- * get(pathname, { access: 'private' })
- *
- * because that was the point where the previous
- * implementation was failing.
+ * This avoids relying on SDK get() path
+ * resolution/access-mode behaviour.
  */
 async function readPrivateBlob(pathname) {
 
@@ -47,33 +53,39 @@ async function readPrivateBlob(pathname) {
     );
   }
 
-  /*
-   * Token is restricted to:
-   * - this exact pathname
-   * - GET only
-   */
-  const token = await issueSignedToken({
-    pathname,
-    operations: ['get']
-  });
+  const validUntil =
+    Date.now() + READ_TTL_MS;
 
-  const { presignedUrl } = await presignUrl(token, {
-    pathname,
-    operation: 'get',
-    validUntil: Date.now() + READ_URL_TTL_MS
-  });
+  const token =
+    await issueSignedToken({
+      pathname,
+      operations: ['get'],
+      validUntil
+    });
 
-  /*
-   * Fetch the private object directly.
-   */
-  const response = await fetch(presignedUrl, {
-    method: 'GET',
-    cache: 'no-store'
-  });
+  const { presignedUrl } =
+    await presignUrl(token, {
+      pathname,
+      operation: 'get',
+      validUntil,
+      useCache: false
+    });
+
+  const response =
+    await fetch(
+      presignedUrl,
+      {
+        method: 'GET',
+        cache: 'no-store'
+      }
+    );
 
   if (!response.ok) {
 
-    const text = await response.text().catch(() => '');
+    const text =
+      await response
+        .text()
+        .catch(() => '');
 
     throw new Error(
       `Private Blob read failed for ${pathname}: HTTP ${response.status}` +
@@ -81,32 +93,26 @@ async function readPrivateBlob(pathname) {
     );
   }
 
-  const contentType =
-    response.headers.get('content-type') || '';
-
   const contentLength =
-    Number(response.headers.get('content-length') || 0);
+    Number(
+      response
+        .headers
+        .get('content-length') || 0
+    );
 
   if (
-    contentType &&
-    !contentType
-      .toLowerCase()
-      .includes('application/pdf')
+    contentLength >
+    MAX_PDF_BYTES
   ) {
-    console.warn(
-      `Blob ${pathname} returned content-type "${contentType}" instead of application/pdf.`
-    );
-  }
-
-  if (contentLength > MAX_PDF_BYTES) {
     throw new Error(
       `Blob ${pathname} is larger than Gemini's 50 MB PDF input limit.`
     );
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-
-  const buffer = Buffer.from(arrayBuffer);
+  const buffer =
+    Buffer.from(
+      await response.arrayBuffer()
+    );
 
   if (!buffer.length) {
     throw new Error(
@@ -114,26 +120,26 @@ async function readPrivateBlob(pathname) {
     );
   }
 
-  if (buffer.length > MAX_PDF_BYTES) {
+  if (
+    buffer.length >
+    MAX_PDF_BYTES
+  ) {
     throw new Error(
       `Blob ${pathname} is larger than Gemini's 50 MB PDF input limit.`
     );
   }
 
   /*
-   * Verify that what we downloaded is actually a PDF.
-   *
-   * This prevents accidentally sending an HTML error page
-   * or another response to Gemini.
+   * Make sure the response is actually
+   * a PDF and not an HTML/error response.
    */
-  const header =
+  if (
     buffer
       .subarray(0, 5)
-      .toString('ascii');
-
-  if (header !== '%PDF-') {
+      .toString('ascii') !== '%PDF-'
+  ) {
     throw new Error(
-      `Private Blob ${pathname} did not return a valid PDF (received "${header}").`
+      `Private Blob ${pathname} did not return a valid PDF.`
     );
   }
 
@@ -150,37 +156,40 @@ async function uploadToGemini(
   apiKey
 ) {
 
-  const start = await fetch(
-    'https://generativelanguage.googleapis.com/upload/v1beta/files',
-    {
-      method: 'POST',
+  const start =
+    await fetch(
+      'https://generativelanguage.googleapis.com/upload/v1beta/files',
+      {
+        method: 'POST',
 
-      headers: {
-        'x-goog-api-key': apiKey,
+        headers: {
+          'x-goog-api-key':
+            apiKey,
 
-        'X-Goog-Upload-Protocol':
-          'resumable',
+          'X-Goog-Upload-Protocol':
+            'resumable',
 
-        'X-Goog-Upload-Command':
-          'start',
+          'X-Goog-Upload-Command':
+            'start',
 
-        'X-Goog-Upload-Header-Content-Length':
-          String(buffer.length),
+          'X-Goog-Upload-Header-Content-Length':
+            String(buffer.length),
 
-        'X-Goog-Upload-Header-Content-Type':
-          'application/pdf',
+          'X-Goog-Upload-Header-Content-Type':
+            'application/pdf',
 
-        'Content-Type':
-          'application/json'
-      },
+          'Content-Type':
+            'application/json'
+        },
 
-      body: JSON.stringify({
-        file: {
-          display_name: displayName
-        }
-      })
-    }
-  );
+        body: JSON.stringify({
+          file: {
+            display_name:
+              displayName
+          }
+        })
+      }
+    );
 
   if (!start.ok) {
 
@@ -203,28 +212,29 @@ async function uploadToGemini(
     );
   }
 
-  const finish = await fetch(
-    uploadUrl,
-    {
-      method: 'POST',
+  const finish =
+    await fetch(
+      uploadUrl,
+      {
+        method: 'POST',
 
-      headers: {
-        'Content-Length':
-          String(buffer.length),
+        headers: {
+          'Content-Length':
+            String(buffer.length),
 
-        'X-Goog-Upload-Offset':
-          '0',
+          'X-Goog-Upload-Offset':
+            '0',
 
-        'X-Goog-Upload-Command':
-          'upload, finalize',
+          'X-Goog-Upload-Command':
+            'upload, finalize',
 
-        'Content-Type':
-          'application/pdf'
-      },
+          'Content-Type':
+            'application/pdf'
+        },
 
-      body: buffer
-    }
-  );
+        body: buffer
+      }
+    );
 
   const raw =
     await finish.text();
@@ -232,7 +242,8 @@ async function uploadToGemini(
   let data = null;
 
   try {
-    data = JSON.parse(raw);
+    data =
+      JSON.parse(raw);
   } catch (_) {}
 
   if (!finish.ok) {
@@ -259,9 +270,9 @@ async function uploadToGemini(
 
 
 /*
- * Delete temporary private Blob object.
+ * Clean up the temporary private Blob.
  */
-async function cleanupWithSignedDelete(pathname) {
+async function cleanupBlob(pathname) {
 
   if (
     typeof pathname !== 'string' ||
@@ -272,18 +283,22 @@ async function cleanupWithSignedDelete(pathname) {
 
   try {
 
+    const validUntil =
+      Date.now() +
+      DELETE_TTL_MS;
+
     const token =
       await issueSignedToken({
         pathname,
-        operations: ['delete']
+        operations: ['delete'],
+        validUntil
       });
 
     const { presignedUrl } =
       await presignUrl(token, {
         pathname,
         operation: 'delete',
-        validUntil:
-          Date.now() + 60 * 1000
+        validUntil
       });
 
     const response =
@@ -299,22 +314,13 @@ async function cleanupWithSignedDelete(pathname) {
       response.status !== 404
     ) {
 
-      const text =
-        await response
-          .text()
-          .catch(() => '');
-
       console.warn(
-        `Blob cleanup failed for ${pathname}: HTTP ${response.status} ${text}`
+        `Blob cleanup failed for ${pathname}: HTTP ${response.status}`
       );
     }
 
   } catch (err) {
 
-    /*
-     * Cleanup failure must never replace
-     * the actual Gemini comparison result.
-     */
     console.warn(
       `Blob cleanup exception for ${pathname}:`,
       err?.message || err
@@ -323,307 +329,304 @@ async function cleanupWithSignedDelete(pathname) {
 }
 
 
-module.exports = async function handler(
-  req,
-  res
-) {
+module.exports =
+  async function handler(req, res) {
 
-  if (req.method !== 'POST') {
-
-    return send(res, 405, {
-      error: 'Method not allowed.'
-    });
-  }
-
-  const apiKey =
-    process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-
-    return send(res, 500, {
-      error:
-        'GEMINI_API_KEY is not configured in Vercel Environment Variables.'
-    });
-  }
-
-  let oldPath = null;
-  let newPath = null;
-
-  try {
-
-    const body =
-      parseBody(req);
-
-    const prompt =
-      String(body.prompt || '');
-
-    oldPath =
-      String(body.oldPath || '');
-
-    newPath =
-      String(body.newPath || '');
-
-    const model =
-      String(
-        body.model ||
-        MODEL_DEFAULT
-      );
-
-    if (
-      !prompt ||
-      !oldPath ||
-      !newPath
-    ) {
-
-      return send(res, 400, {
-        error:
-          'Missing prompt or temporary PDF paths.'
+    if (req.method !== 'POST') {
+      return send(res, 405, {
+        error: 'Method not allowed.'
       });
     }
 
-    for (
-      const pathname of [
-        oldPath,
-        newPath
-      ]
-    ) {
+    const apiKey =
+      process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+
+      return send(res, 500, {
+        error:
+          'GEMINI_API_KEY is not configured in Vercel Environment Variables.'
+      });
+    }
+
+    let oldPath = null;
+    let newPath = null;
+
+    try {
+
+      const body =
+        parseBody(req);
+
+      const prompt =
+        String(
+          body.prompt || ''
+        );
+
+      oldPath =
+        String(
+          body.oldPath || ''
+        );
+
+      newPath =
+        String(
+          body.newPath || ''
+        );
+
+      const selectedModel =
+        String(
+          body.model ||
+          MODEL_DEFAULT
+        );
 
       if (
-        !pathname.startsWith(
-          'doc-compare/'
-        )
+        !prompt ||
+        !oldPath ||
+        !newPath
       ) {
 
         return send(res, 400, {
           error:
-            'Invalid temporary PDF path.'
+            'Missing prompt or temporary PDF paths.'
         });
       }
-    }
 
-    console.log(
-      'Gemini PDF comparison: reading private Blob objects',
-      {
-        oldPath,
-        newPath,
-        model
-      }
-    );
+      for (
+        const pathname of [
+          oldPath,
+          newPath
+        ]
+      ) {
 
-
-    /*
-     * Read the EXACT objects that the
-     * upload endpoint created.
-     */
-    const [
-      oldBuffer,
-      newBuffer
-    ] = await Promise.all([
-      readPrivateBlob(oldPath),
-      readPrivateBlob(newPath)
-    ]);
-
-
-    console.log(
-      'Private Blob reads successful',
-      {
-        oldBytes:
-          oldBuffer.length,
-
-        newBytes:
-          newBuffer.length
-      }
-    );
-
-
-    /*
-     * Upload both PDFs to Gemini.
-     */
-    const [
-      oldUri,
-      newUri
-    ] = await Promise.all([
-      uploadToGemini(
-        oldBuffer,
-        'original.pdf',
-        apiKey
-      ),
-
-      uploadToGemini(
-        newBuffer,
-        'updated.pdf',
-        apiKey
-      )
-    ]);
-
-
-    /*
-     * Ask Gemini to compare the two PDFs.
-     */
-    const endpoint =
-      'https://generativelanguage.googleapis.com/v1beta/models/' +
-      `${encodeURIComponent(model)}:generateContent`;
-
-
-    const upstream =
-      await fetch(
-        endpoint,
-        {
-          method: 'POST',
-
-          headers: {
-            'Content-Type':
-              'application/json',
-
-            'x-goog-api-key':
-              apiKey
-          },
-
-          body: JSON.stringify({
-
-            contents: [
-
-              {
-                parts: [
-
-                  {
-                    text: prompt
-                  },
-
-                  {
-                    fileData: {
-                      mimeType:
-                        'application/pdf',
-
-                      fileUri:
-                        oldUri
-                    }
-                  },
-
-                  {
-                    fileData: {
-                      mimeType:
-                        'application/pdf',
-
-                      fileUri:
-                        newUri
-                    }
-                  }
-
-                ]
-              }
-
-            ],
-
-            generationConfig: {
-
-              temperature: 0,
-
-              responseMimeType:
-                'application/json'
-
-            }
-
-          })
-        }
-      );
-
-
-    const raw =
-      await upstream.text();
-
-    let data;
-
-    try {
-      data =
-        JSON.parse(raw);
-    } catch (_) {
-      data = null;
-    }
-
-
-    if (!upstream.ok) {
-
-      const message =
-        data?.error?.message ||
-        raw ||
-        `Gemini API returned ${upstream.status}`;
-
-      return send(
-        res,
-        upstream.status,
-        {
-          error:
-            `Gemini API ${upstream.status}: ${message}`
-        }
-      );
-    }
-
-
-    const text =
-      (data?.candidates || [])
-
-        .flatMap(
-          candidate =>
-            candidate
-              ?.content
-              ?.parts || []
-        )
-
-        .map(
-          part =>
-            part?.text || ''
-        )
-
-        .join('');
-
-
-    return send(res, 200, {
-      text
-    });
-
-
-  } catch (err) {
-
-    console.error(
-      'Gemini private-Blob comparison error:',
-      err
-    );
-
-    return send(res, 500, {
-
-      error:
-        err?.message ||
-        'Gemini proxy failed.',
-
-      stage:
-        'private-blob-or-gemini-processing'
-
-    });
-
-  } finally {
-
-    /*
-     * Server-side cleanup is authoritative.
-     *
-     * Even if Gemini fails, the temporary PDFs
-     * are removed from the private Blob store.
-     */
-    await Promise.allSettled([
-
-      oldPath
-        ? cleanupWithSignedDelete(
-            oldPath
+        if (
+          !pathname.startsWith(
+            'doc-compare/'
           )
-        : Promise.resolve(),
+        ) {
 
-      newPath
-        ? cleanupWithSignedDelete(
+          return send(res, 400, {
+            error:
+              'Invalid temporary PDF path.'
+          });
+        }
+      }
+
+      console.log(
+        'Gemini PDF comparison: reading private Blob objects',
+        {
+          oldPath,
+          newPath,
+          model: selectedModel
+        }
+      );
+
+
+      /*
+       * Read the exact objects that
+       * the upload endpoint created.
+       */
+      const [
+        oldBuffer,
+        newBuffer
+      ] =
+        await Promise.all([
+          readPrivateBlob(
+            oldPath
+          ),
+
+          readPrivateBlob(
             newPath
           )
-        : Promise.resolve()
+        ]);
 
-    ]);
 
-  }
-};
+      console.log(
+        'Private Blob reads successful',
+        {
+          oldBytes:
+            oldBuffer.length,
+
+          newBytes:
+            newBuffer.length
+        }
+      );
+
+
+      /*
+       * Upload both PDFs to Gemini.
+       */
+      const [
+        oldUri,
+        newUri
+      ] =
+        await Promise.all([
+
+          uploadToGemini(
+            oldBuffer,
+            'original.pdf',
+            apiKey
+          ),
+
+          uploadToGemini(
+            newBuffer,
+            'updated.pdf',
+            apiKey
+          )
+
+        ]);
+
+
+      /*
+       * Gemini comparison request.
+       */
+      const endpoint =
+        'https://generativelanguage.googleapis.com/v1beta/models/' +
+        `${encodeURIComponent(selectedModel)}:generateContent`;
+
+
+      const upstream =
+        await fetch(
+          endpoint,
+          {
+            method: 'POST',
+
+            headers: {
+              'Content-Type':
+                'application/json',
+
+              'x-goog-api-key':
+                apiKey
+            },
+
+            body: JSON.stringify({
+
+              contents: [
+
+                {
+                  parts: [
+
+                    {
+                      text:
+                        prompt
+                    },
+
+                    {
+                      fileData: {
+                        mimeType:
+                          'application/pdf',
+
+                        fileUri:
+                          oldUri
+                      }
+                    },
+
+                    {
+                      fileData: {
+                        mimeType:
+                          'application/pdf',
+
+                        fileUri:
+                          newUri
+                      }
+                    }
+
+                  ]
+                }
+
+              ],
+
+              generationConfig: {
+                temperature: 0,
+
+                responseMimeType:
+                  'application/json'
+              }
+
+            })
+          }
+        );
+
+
+      const raw =
+        await upstream.text();
+
+      let data = null;
+
+      try {
+        data =
+          JSON.parse(raw);
+      } catch (_) {}
+
+
+      if (!upstream.ok) {
+
+        const message =
+          data?.error?.message ||
+          raw ||
+          `Gemini API returned ${upstream.status}`;
+
+        return send(
+          res,
+          upstream.status,
+          {
+            error:
+              `Gemini API ${upstream.status}: ${message}`
+          }
+        );
+      }
+
+
+      const text =
+        (data?.candidates || [])
+
+          .flatMap(
+            c =>
+              c?.content?.parts || []
+          )
+
+          .map(
+            p =>
+              p?.text || ''
+          )
+
+          .join('');
+
+
+      return send(res, 200, {
+        text
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        'Gemini private-Blob comparison error:',
+        err
+      );
+
+      return send(res, 500, {
+
+        error:
+          err?.message ||
+          'Gemini proxy failed.',
+
+        stage:
+          'private-blob-or-gemini-processing'
+
+      });
+
+    } finally {
+
+      await Promise.allSettled([
+
+        oldPath
+          ? cleanupBlob(oldPath)
+          : Promise.resolve(),
+
+        newPath
+          ? cleanupBlob(newPath)
+          : Promise.resolve()
+
+      ]);
+
+    }
+  };
