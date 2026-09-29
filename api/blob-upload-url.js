@@ -8,7 +8,6 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     return send(res, 405, { error: 'Method not allowed.' });
   }
-
   try {
     const body =
       typeof req.body === 'string'
@@ -47,9 +46,11 @@ module.exports = async function handler(req, res) {
       operations: ['put']
     });
 
+    // FIX: Explicitly set access to 'private' to match the read request in gemini.js
     const { presignedUrl } = await presignUrl(token, {
       pathname,
       operation: 'put',
+      access: 'private', // <--- ADDED THIS LINE
       validUntil: Date.now() + 15 * 60 * 1000
     });
 
@@ -59,7 +60,6 @@ module.exports = async function handler(req, res) {
     });
   } catch (err) {
     console.error('blob-upload-url error:', err);
-
     return send(res, 500, {
       error:
         err?.message ||
