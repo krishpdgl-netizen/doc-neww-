@@ -860,39 +860,236 @@ Preserve changed wording EXACTLY as it appears in the relevant PDF. Never paraph
   }
 }
 
-function findGeminiBlocks(blocks,text,pageHint){
-  const target=String(text||'').split(/\s+/).map(normWord).filter(Boolean).join(' '); if(!target)return [];
-  const toks=target.split(/\s+/); let best=-1,bestScore=0;
-  for(let i=0;i<blocks.length;i++){
-    if(pageHint!=null&&blocks[i].page!==pageHint)continue;
-    const bk=blocks[i].key;
-    if(bk.includes(target)||target.includes(bk))return [i];
-    const bw=new Set(bk.split(/\s+/)); let hits=0; for(const t of toks)if(bw.has(t))hits++;
-    const score=hits/Math.max(toks.length,bk.split(/\s+/).length); if(score>bestScore){bestScore=score;best=i;}
-  }
-  if(best<0||bestScore<0.35){best=-1;bestScore=0;for(let i=0;i<blocks.length;i++){const score=dice(blocks[i].key,target);if(score>bestScore){bestScore=score;best=i;}}}
-  return best>=0&&bestScore>=0.35?[best]:[];
+/*
+ * Gemini -> PDF locator
+ * ---------------------
+ * Never locate a Gemini change by "most similar block". That is unsafe for
+ * legal documents because the same words (party, agreement, information,
+ * incorporated, etc.) occur many times.
+ *
+ * Instead we search the actual PDF word stream and require a contiguous
+ * sequence of words. The returned words are the ORIGINAL PDF.js/OCR words,
+ * so their bx/p coordinates are the coordinates used for the highlight.
+ */
+function geminiTokens(text){
+  return String(text||'').split(/\s+/).map(normWord).filter(Boolean);
 }
-function wordsMatchingText(blocks,idxs,text){
-  const target=String(text||'').split(/\s+/).map(normWord).filter(Boolean); if(!target.length)return [];
-  const out=[];let ti=0;
-  for(const bi of idxs)for(const w of blocks[bi]?.words||[]){if(ti>=target.length)break;if(w.k===target[ti]||dice(w.k,target[ti])>=0.86){out.push(w);ti++;}}
-  if(ti<Math.max(1,Math.floor(target.length*.55))){const set=new Set(target);return idxs.flatMap(i=>(blocks[i]?.words||[]).filter(w=>set.has(w.k)));}
+
+function pageWordStream(blocks,pageHint){
+  const out=[];
+  for(let bi=0;bi<blocks.length;bi++){
+    const b=blocks[bi];
+    if(pageHint!=null&&b.page!==pageHint)continue;
+    for(let wi=0;wi<b.dw.length;wi++){
+      const w=b.dw[wi];
+      out.push({w,bi,wi,page:b.page});
+    }
+  }
   return out;
 }
+
+function tokenCompatible(a,b,ocr){
+  if(a===b)return true;
+  if(ocr){
+    if(/\d/.test(a)||/\d/.test(b))return a.replace(/[.,]/g,'')===b.replace(/[.,]/g,'');
+    if(a.length>=4&&b.length>=4)return dice(a,b)>=0.90;
+  }
+  return false;
+}
+
+function phraseCandidateScore(items,start,end,target,pageHint){
+  const first=items[start],last=items[end-1];
+  const blocks=new Set(items.slice(start,end).map(x=>x.bi));
+  const page=first?.page??0;
+  const blockSpan=Math.max(1,blocks.size);
+  const ySpan=first?.w?.bx?.[0]&&last?.w?.bx?.[0]
+    ? Math.abs((first.w.bx[0][1]+first.w.bx[0][3])/2-(last.w.bx[0][1]+last.w.bx[0][3])/2)
+    : 0;
+  // Prefer compact, continuous phrases. Page hint is a hard preference.
+  let score=1000-blockSpan*40-ySpan*100;
+  if(pageHint!=null)score+=page===pageHint?500:0;
+  // Prefer candidates whose first/last blocks are the same when possible.
+  if(first?.bi===last?.bi)score+=100;
+  return score;
+}
+
+function locateGeminiPhrase(blocks,text,pageHint){
+  const target=geminiTokens(text);
+  if(!target.length)return null;
+
+  const pages=pageHint!=null?[pageHint]:[...new Set(blocks.map(b=>b.page))];
+  let best=null;
+
+  for(const page of pages){
+    const items=pageWordStream(blocks,page);
+    if(!items.length)continue;
+    const ocr=items.some(x=>blocks[x.bi]?.ocr);
+
+    for(let start=0;start<=items.length-target.length;start++){
+      let ok=true;
+      for(let k=0;k<target.length;k++){
+        const a=items[start+k]?.w?.k;
+        const b=target[k];
+        if(!tokenCompatible(a,b,ocr)){ok=false;break;}
+      }
+      if(!ok)continue;
+
+      const end=start+target.length;
+      const score=phraseCandidateScore(items,start,end,target,pageHint);
+      if(!best||score>best.score){
+        best={
+          score,
+          words:items.slice(start,end).map(x=>x.w),
+          idxs:[...new Set(items.slice(start,end).map(x=>x.bi))],
+          page
+        };
+      }
+    }
+  }
+
+  return best;
+}
+
+/*
+ * A secondary locator for OCR only. It is deliberately conservative: fuzzy
+ * matching is allowed only when the exact contiguous phrase cannot be found.
+ */
+function locateGeminiPhraseFuzzy(blocks,text,pageHint){
+  const target=geminiTokens(text);
+  if(!target.length)return null;
+
+  const candidates=[];
+  const pages=pageHint!=null?[pageHint]:[...new Set(blocks.map(b=>b.page))];
+
+  for(const page of pages){
+    for(let bi=0;bi<blocks.length;bi++){
+      const b=blocks[bi];
+      if(b.page!==page)continue;
+      const words=b.dw;
+      if(!words.length)continue;
+
+      // Search for the best contiguous window of approximately target length.
+      const span=Math.min(words.length,Math.max(1,target.length));
+      for(let st=0;st<words.length;st++){
+        const win=words.slice(st,Math.min(words.length,st+span));
+        if(!win.length)continue;
+        let hits=0;
+        for(let i=0;i<Math.min(win.length,target.length);i++){
+          if(tokenCompatible(win[i].k,target[i],!!b.ocr))hits++;
+        }
+        const ratio=hits/Math.max(target.length,win.length);
+        if(ratio>=0.90){
+          candidates.push({ratio,words:win,idxs:[bi],page});
+        }
+      }
+    }
+  }
+
+  candidates.sort((a,b)=>b.ratio-a.ratio);
+  return candidates[0]||null;
+}
+
+function findGeminiBlocks(blocks,text,pageHint){
+  const hit=locateGeminiPhrase(blocks,text,pageHint)||locateGeminiPhraseFuzzy(blocks,text,pageHint);
+  return hit?hit.idxs:[];
+}
+
+function wordsMatchingText(blocks,idxs,text,pageHint){
+  // First try the exact phrase locator. This is the critical path for native PDFs.
+  const exact=locateGeminiPhrase(blocks,text,pageHint);
+  if(exact)return exact.words;
+
+  // Only use the old block-level logic as a last-resort OCR fallback, and
+  // require a strong sequential match. Never return arbitrary same-word hits.
+  const target=geminiTokens(text);
+  if(!target.length||!idxs?.length)return [];
+
+  for(const bi of idxs){
+    const b=blocks[bi];
+    if(!b)continue;
+    const words=b.dw||[];
+    for(let st=0;st<=words.length-target.length;st++){
+      let ok=true;
+      for(let i=0;i<target.length;i++){
+        if(!tokenCompatible(words[st+i].k,target[i],!!b.ocr)){ok=false;break;}
+      }
+      if(ok)return words.slice(st,st+target.length);
+    }
+  }
+
+  return [];
+}
+
 function geminiChangesToLocal(gChanges,ob,nb){
   const out=[];
+
   for(const g of gChanges){
     const type=['added','deleted','modified','moved'].includes(g.type)?g.type:'modified';
-    const oldText=String(g.oldText||'').trim(),newText=String(g.newText||'').trim(); if(!oldText&&!newText)continue;
-    const op=Number.isFinite(+g.oldPage)?Math.max(0,+g.oldPage-1):null,np=Number.isFinite(+g.newPage)?Math.max(0,+g.newPage-1):null;
-    let oi=oldText?findGeminiBlocks(ob,oldText,op):[],ni=newText?findGeminiBlocks(nb,newText,np):[];
-    if(!oi.length&&oldText)oi=findGeminiBlocks(ob,oldText,null); if(!ni.length&&newText)ni=findGeminiBlocks(nb,newText,null);
-    const rmWords=oldText?wordsMatchingText(ob,oi,oldText):[],addWords=newText?wordsMatchingText(nb,ni,newText):[];
-    const cl=classifyChange(oldText,newText,oldText,newText,type),confs=[...rmWords,...addWords].map(w=>w.conf).filter(c=>typeof c==='number');
-    out.push({id:out.length+1,type,oldText,newText,rmText:oldText,addText:newText,rmWords,addWords,oldIdxs:oi,newIdxs:ni,oldIdx:oi[0]??-1,newIdx:ni[0]??-1,
-      oldBoxes:boxesOf(rmWords),newBoxes:boxesOf(addWords),oldAnchor:anchorOf(ob,oi,0),newAnchor:anchorOf(nb,ni,0),page:ni[0]??oi[0]??0,ocr:[...oi.map(i=>ob[i]),...ni.map(i=>nb[i])].some(b=>b?.ocr),conf:confs.length?Math.round(Math.min(...confs)):null,...cl,gemini:true});
+    const oldText=String(g.oldText||'').trim();
+    const newText=String(g.newText||'').trim();
+    if(!oldText&&!newText)continue;
+
+    const op=Number.isFinite(+g.oldPage)?Math.max(0,+g.oldPage-1):null;
+    const np=Number.isFinite(+g.newPage)?Math.max(0,+g.newPage-1):null;
+
+    const oldHit=oldText?locateGeminiPhrase(ob,oldText,op):null;
+    const newHit=newText?locateGeminiPhrase(nb,newText,np):null;
+
+    // If Gemini supplied a page, don't silently jump to another occurrence.
+    // Only fall back globally when the page contains no exact match at all.
+    const oldFallback=!oldHit&&oldText?locateGeminiPhrase(ob,oldText,null):null;
+    const newFallback=!newHit&&newText?locateGeminiPhrase(nb,newText,null):null;
+
+    const oh=oldHit||oldFallback;
+    const nh=newHit||newFallback;
+
+    const oi=oh?oh.idxs:[];
+    const ni=nh?nh.idxs:[];
+    const rmWords=oh?oh.words:[];
+    const addWords=nh?nh.words:[];
+
+    // A Gemini result is only trusted when its exact wording can actually be
+    // located. This prevents fuzzy/random highlights.
+    if(oldText&&!rmWords.length)continue;
+    if(newText&&!addWords.length)continue;
+
+    const cl=classifyChange(
+      oldText,
+      newText,
+      oldText,
+      newText,
+      type
+    );
+
+    const confs=[...rmWords,...addWords]
+      .map(w=>w.conf)
+      .filter(c=>typeof c==='number');
+
+    out.push({
+      id:out.length+1,
+      type,
+      oldText,
+      newText,
+      rmText:oldText,
+      addText:newText,
+      rmWords,
+      addWords,
+      oldIdxs:oi,
+      newIdxs:ni,
+      oldIdx:oi[0]??-1,
+      newIdx:ni[0]??-1,
+      oldBoxes:boxesOf(rmWords),
+      newBoxes:boxesOf(addWords),
+      oldAnchor:anchorOf(ob,oi,0),
+      newAnchor:anchorOf(nb,ni,0),
+      page:nh?.page??oh?.page??ni[0]??oi[0]??0,
+      ocr:[...oi.map(i=>ob[i]),...ni.map(i=>nb[i])].some(b=>b?.ocr),
+      conf:confs.length?Math.round(Math.min(...confs)):null,
+      ...cl,
+      gemini:true
+    });
   }
+
   return out;
 }
 
@@ -1260,9 +1457,11 @@ async function runCompare(){
     await new Promise(r=>setTimeout(r,0));
     S.aiNote='';
     S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
-    // Scanned PDFs: ask Gemini for a second opinion. Native PDFs never leave the browser.
-    if(oc.type==='pdf'&&nc.type==='pdf'&&(oc.ocrPageCount||0)+(nc.ocrPageCount||0)>0){
-      setStage(4,'AI check on scanned pages','Local comparison done; asking Gemini to catch anything OCR could have blurred…');
+    // PDF ↔ PDF: use Gemini as the semantic second pass for every PDF comparison.
+    // The local PDF.js/OCR word model remains the coordinate source of truth; Gemini
+    // supplies semantic changes, which are mapped back to exact PDF word sequences.
+    if(oc.type==='pdf'&&nc.type==='pdf'){
+      setStage(4,'AI check on PDF changes','Local comparison done; asking Gemini to verify substantive PDF changes…');
       try{
         const gc=await callGeminiPdfCompare(S.oldFile,S.newFile);
         const m=mergeAiChanges(S.changes,geminiChangesToLocal(gc,oc.blocks,nc.blocks),oc.blocks,nc.blocks);
