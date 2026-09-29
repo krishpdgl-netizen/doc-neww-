@@ -1,6 +1,6 @@
 const { get, del } = require('@vercel/blob');
 
-const MODEL_DEFAULT = 'gemini-3.5-flash-lite';
+const MODEL_DEFAULT = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 
 function send(res, status, body) {
@@ -177,7 +177,7 @@ module.exports = async function handler(req, res) {
       uploadToGemini(newBuffer, 'updated.pdf', apiKey)
     ]);
 
-    const selectedModel = String(model || MODEL_DEFAULT);
+    const selectedModel = MODEL_DEFAULT;
     const endpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/' +
       encodeURIComponent(selectedModel) +
