@@ -234,6 +234,14 @@ mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0
 .pdf-page-wrap canvas{display:block;max-width:100%}
 .pdf-hl-overlay{position:absolute;top:0;left:0;pointer-events:none}
 .pdf-text-overlay{position:absolute;top:0;left:0;overflow:hidden;opacity:0;line-height:1;white-space:pre;pointer-events:none}
+.pdf-text-layer{position:absolute;inset:0;z-index:2;overflow:hidden;line-height:1;pointer-events:none}
+.pdf-text-layer span{position:absolute;white-space:pre;transform-origin:0 0;color:transparent;user-select:none}
+.pdf-text-layer .highlight-hit{color:transparent}
+.gemini-note{font-size:10px;color:var(--purple);margin-top:8px;line-height:1.4}
+.gemini-key-row{display:none;align-items:center;gap:8px;margin-top:12px}
+.gemini-key-row.on{display:flex}
+.gemini-key-input{flex:1;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 9px;font-size:11px;outline:none}
+.gemini-key-input:focus{border-color:var(--blue)}
 
 /* detail panel */
 #detail{border-top:1px solid var(--border);background:var(--panel);flex-shrink:0;overflow-y:auto;max-height:200px}
@@ -341,6 +349,12 @@ mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0
               <div class="chip" data-grp="watch">Names</div>
             </div>
           </div>
+          <div class="gemini-key-row" id="gemini-key-row">
+            <span class="config-title" style="margin:0;white-space:nowrap">Gemini API key</span>
+            <input id="gemini-key-input" class="gemini-key-input" type="password" autocomplete="off" placeholder="Required when comparing PDFs">
+            <button class="btn" id="gemini-key-clear" type="button">Clear</button>
+          </div>
+          <div class="gemini-note" id="gemini-note" style="display:none">PDF-to-PDF comparisons use Gemini document understanding. Other file types keep the existing local comparison engine.</div>
         </div>
       </div>
       <div class="up-actions">
@@ -628,6 +642,108 @@ async function extractPptx(buf){
   }
   return out.join('\n');
 }
+// ── Gemini PDF comparison ─────────────────────────────────────
+// PDF files are deliberately routed through Gemini. Non-PDF files never call the API.
+const GEMINI_MODEL='gemini-3.6-flash';
+const GEMINI_KEY_STORE='diffiq_gemini_api_key';
+const isPdfFile=f=>!!f&&f.name.toLowerCase().endsWith('.pdf');
+function getGeminiKey(){
+  let k='';try{k=sessionStorage.getItem(GEMINI_KEY_STORE)||'';}catch(e){}
+  return k.trim();
+}
+function setGeminiKey(k){try{sessionStorage.setItem(GEMINI_KEY_STORE,k.trim());}catch(e){}}
+function clearGeminiKey(){try{sessionStorage.removeItem(GEMINI_KEY_STORE);}catch(e){};const i=$('gemini-key-input');if(i)i.value='';}
+function fileToBase64(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>{const v=String(r.result||'');res(v.slice(v.indexOf(',')+1));};r.onerror=()=>rej(new Error('Could not read '+file.name));r.readAsDataURL(file);});}
+const GEMINI_SCHEMA={
+  type:'object',
+  properties:{
+    changes:{type:'array',items:{type:'object',properties:{
+      type:{type:'string',enum:['added','deleted','modified','moved']},
+      old_text:{type:'string'},new_text:{type:'string'},
+      old_page:{type:'integer'},new_page:{type:'integer'},
+      old_anchor:{type:'string'},new_anchor:{type:'string'},
+      reason:{type:'string'}
+    },required:['type','old_text','new_text','old_page','new_page','old_anchor','new_anchor','reason']}}
+  },
+  required:['changes']
+};
+const GEMINI_PROMPT=`You are the document-diff engine for a professional document comparison application. Compare the OLD PDF and UPDATED PDF exactly as documents, not as summaries. Identify every meaningful textual/content change: additions, deletions, replacements/modifications, and moved text. Ignore purely visual rendering differences, font rasterization, tiny spacing differences, and page reflow unless the underlying content changed.\n\nCRITICAL RULES:\n1. old_text and new_text MUST reproduce the exact visible wording from the corresponding PDF, preserving numbers, dates, names, punctuation, and wording. Do not paraphrase.\n2. For an added change, old_text must be empty. For a deleted change, new_text must be empty. For a modified change, provide both exact old and exact new text.\n3. Keep each change reasonably local (normally a word, phrase, sentence, paragraph, table cell, or clause), not an entire document.\n4. old_page and new_page are 1-based page numbers. Use 0 when a side has no corresponding page.\n5. old_anchor and new_anchor must be exact short text snippets (10-80 characters) copied from the relevant PDF that make the changed location easy to find. Never invent them. For one-sided changes, the missing side anchor is empty.\n6. Do not report the same underlying change twice merely because it appears in a header/footer or page reflow.\n7. Be exhaustive: inspect every page, including tables and repeated legal clauses.\nReturn ONLY JSON matching the supplied schema.`;
+
+async function callGeminiPdfCompare(oldFile,newFile){
+  let key=getGeminiKey();
+  const input=$('gemini-key-input');
+  if(!key&&input?.value?.trim()){key=input.value.trim();setGeminiKey(key);}
+  if(!key)throw new Error('PDF comparison requires a Gemini API key. Enter it in the Gemini API key field.');
+  if(!isPdfFile(oldFile)||!isPdfFile(newFile))throw new Error('Gemini PDF mode currently requires both files to be PDFs. Non-PDF comparisons continue to use the existing engine.');
+  const detail=$('prog-detail');
+  if(detail)detail.textContent='Gemini is reading both PDFs and comparing their actual document content…';
+  const [oldData,newData]=await Promise.all([fileToBase64(oldFile),fileToBase64(newFile)]);
+  const body={
+    contents:[{parts:[
+      {inline_data:{mime_type:'application/pdf',data:oldData}},
+      {inline_data:{mime_type:'application/pdf',data:newData}},
+      {text:`${GEMINI_PROMPT}\n\nThe first PDF is OLD VERSION: ${oldFile.name}\nThe second PDF is UPDATED VERSION: ${newFile.name}`}
+    ]}],
+    generationConfig:{responseMimeType:'application/json',responseSchema:GEMINI_SCHEMA,temperature:0}
+  };
+  const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,{
+    method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)
+  });
+  const raw=await r.text();
+  let j;try{j=JSON.parse(raw);}catch(e){throw new Error('Gemini returned an invalid response.');}
+  if(!r.ok){const msg=j?.error?.message||`Gemini API request failed (${r.status})`;throw new Error(msg);}
+  const txt=j?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('')||'';
+  if(!txt)throw new Error('Gemini returned no comparison result.');
+  let result;try{result=JSON.parse(txt);}catch(e){throw new Error('Gemini returned malformed comparison JSON.');}
+  return result?.changes||[];
+}
+function normalizeSearch(s){return normWord(String(s||'')).replace(/[^\p{L}\p{N}\u20b9$%]+/gu,' ').trim();}
+function tokenList(s){return normalizeSearch(s).split(/\s+/).filter(Boolean);}
+function fuzzyTokenEq(a,b){return a===b||dice(a,b)>=0.88;}
+function locateInBlocks(content,text,pageHint){
+  const target=tokenList(text);if(!target.length)return[];
+  const candidates=[];
+  const blocks=content.blocks||[];
+  for(let bi=0;bi<blocks.length;bi++){
+    const b=blocks[bi];if(pageHint>0&&b.page!==pageHint-1)continue;
+    const words=b.words||[], ks=words.map(w=>normWord(w.t));
+    for(let i=0;i+target.length<=ks.length;i++){
+      let ok=true;for(let j=0;j<target.length;j++)if(!fuzzyTokenEq(ks[i+j],target[j])){ok=false;break;}
+      if(ok){
+        const ws=words.slice(i,i+target.length),boxes=[];ws.forEach(w=>(w.bx||[]).forEach(bx=>boxes.push({p:w.p,b:bx})));
+        candidates.push({words:ws,boxes,score:1,bi});
+      }
+    }
+  }
+  return candidates.sort((a,b)=>a.bi-b.bi).slice(0,8).flatMap(x=>x.boxes);
+}
+function geminiChangeToLocal(g,oldC,newC,id){
+  const type=g.type;
+  const oldText=String(g.old_text||'').trim(),newText=String(g.new_text||'').trim();
+  const oldBoxes=oldText?locateInBlocks(oldC,oldText,g.old_page):[];
+  const newBoxes=newText?locateInBlocks(newC,newText,g.new_page):[];
+  const rmText=oldText,addText=newText;
+  const cl=classifyChange(rmText,addText,oldText,newText,type);
+  return {id,type,oldText,newText,rmText,addText,oldBoxes,newBoxes,
+    oldAnchor:oldBoxes[0]||null,newAnchor:newBoxes[0]||null,
+    oldIdxs:[],newIdxs:[],oldIdx:-1,newIdx:-1,page:(newBoxes[0]||oldBoxes[0])?.p,
+    ocr:!!(oldC.ocrPageCount||newC.ocrPageCount),conf:null,...cl,
+    gemini:true,pdfOldTarget:oldText,pdfNewTarget:newText,
+    oldPageHint:g.old_page||0,newPageHint:g.new_page||0,
+    oldAnchorText:g.old_anchor||oldText,newAnchorText:g.new_anchor||newText,
+    reason:g.reason||''};
+}
+async function diffPdfWithGemini(oldC,newC){
+  const raw=await callGeminiPdfCompare(S.oldFile,S.newFile);
+  const changes=[];
+  raw.forEach((g)=>{
+    if(!g||!['added','deleted','modified','moved'].includes(g.type))return;
+    if(!String(g.old_text||'').trim()&&!String(g.new_text||'').trim())return;
+    changes.push(geminiChangeToLocal(g,oldC,newC,changes.length+1));
+  });
+  return changes;
+}
+
 async function extract(file){
   const ext=file.name.split('.').pop().toLowerCase();
   if(ext==='pdf'){
@@ -917,6 +1033,18 @@ function attach(f,key,fnEl,dz){
 setupDZ('dz-old','fi-old','fn-old','oldFile');
 setupDZ('dz-new','fi-new','fn-new','newFile');
 
+function refreshGeminiUi(){
+  const onPdf=isPdfFile(S.oldFile)&&isPdfFile(S.newFile);
+  const row=$('gemini-key-row'),note=$('gemini-note'),input=$('gemini-key-input');
+  if(row)row.classList.toggle('on',onPdf);
+  if(note)note.style.display=onPdf?'block':'none';
+  if(input&&!input.value)input.value=getGeminiKey();
+}
+$('gemini-key-clear')?.addEventListener('click',clearGeminiKey);
+$('gemini-key-input')?.addEventListener('change',e=>setGeminiKey(e.target.value));
+const _attach=attach;
+attach=function(f,key,fnEl,dz){_attach(f,key,fnEl,dz);refreshGeminiUi();};
+
 document.querySelectorAll('[data-grp="sens"]').forEach(el=>{
   el.addEventListener('click',()=>{
     document.querySelectorAll('[data-grp="sens"]').forEach(x=>x.classList.remove('on'));
@@ -984,7 +1112,7 @@ async function runCompare(){
     const isXlsx=oc.type==='xlsx'||nc.type==='xlsx';
     setStage(3);
     await new Promise(r=>setTimeout(r,0));
-    S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
+    S.changes=(oc.type==='pdf'||nc.type==='pdf')?await diffPdfWithGemini(oc,nc):(isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks));
 
     // Stage 4-5: Classify
     setStage(4);
@@ -1083,42 +1211,108 @@ function renderPdfPane(container,content,side){
     const tag=document.createElement('div');tag.className='pdf-ptag';tag.textContent='p.'+(i+1)+(pg.ocr?' · OCR':'');w.appendChild(tag);
     wrap.appendChild(w);pageEls.push(w);
   });
-  // overlays for every change on this side
   const boxKey=side==='old'?'oldBoxes':'newBoxes',ancKey=side==='old'?'oldAnchor':'newAnchor';
-  S.changes.forEach(ch=>{
-    const boxes=ch[boxKey]||[];
-    boxes.forEach(({p,b})=>{
-      const pw=pageEls[p];if(!pw)return;
-      const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;
-      d.style.cssText=`left:${b[0]*100-.15}%;top:${b[1]*100-.1}%;width:${(b[2]-b[0])*100+.3}%;height:${(b[3]-b[1])*100+.2}%`;
-      d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);
-      d.addEventListener('click',()=>setActive(ch.id));
-      pw.appendChild(d);
+  const addLegacyOverlays=()=>{
+    if(content._geminiRendered)return;
+    S.changes.forEach(ch=>{
+      const boxes=ch[boxKey]||[];
+      boxes.forEach(({p,b})=>{
+        const pw=pageEls[p];if(!pw)return;
+        const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;
+        d.style.cssText=`left:${b[0]*100-.15}%;top:${b[1]*100-.1}%;width:${(b[2]-b[0])*100+.3}%;height:${(b[3]-b[1])*100+.2}%`;
+        d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);
+        d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);
+      });
+      if(!boxes.length&&ch[ancKey]){
+        const{p,b}=ch[ancKey],pw=pageEls[p];if(!pw)return;
+        const d=document.createElement('div');d.className='pdf-anchor';d.dataset.id=ch.id;
+        d.style.cssText=`left:0;right:0;top:${b[1]*100}%;height:${(b[3]-b[1])*100}%`;
+        d.title='Change '+ch.type+' on the other side, here';d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);
+      }
     });
-    if(!boxes.length&&ch[ancKey]){ // one-sided change: mark where it happened on this side
-      const{p,b}=ch[ancKey],pw=pageEls[p];if(!pw)return;
-      const d=document.createElement('div');d.className='pdf-anchor';d.dataset.id=ch.id;
-      d.style.cssText=`left:0;right:0;top:${b[1]*100}%;height:${(b[3]-b[1])*100}%`;
-      d.title='Change '+ch.type+' on the other side, here';
-      d.addEventListener('click',()=>setActive(ch.id));
-      pw.appendChild(d);
+  };
+  const normalizeDomText=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\u2018\u2019`´]/g,"'").replace(/[\u2010-\u2015]/g,'-').replace(/[^\p{L}\p{N}\u20b9$%]+/gu,' ').trim();
+  const highlightTarget=async(pw,target,pageNo,chKey,ch)=>{
+    if(!target)return false;
+    const spans=[...pw.querySelectorAll('.pdf-text-layer span')].filter(s=>(s.textContent||'').trim());
+    if(!spans.length)return false;
+    const targetNorm=normalizeDomText(target),targetTokens=targetNorm.split(/\s+/).filter(Boolean);
+    if(!targetTokens.length)return false;
+    const spanTokens=spans.map((s,i)=>({s,i,t:normalizeDomText(s.textContent)}));
+    let hitStart=-1,hitEnd=-1;
+    // Prefer a contiguous span sequence; PDF.js often gives one word per span.
+    for(let i=0;i<spanTokens.length;i++){
+      let ti=0,j=i;
+      while(j<spanTokens.length&&ti<targetTokens.length){
+        const st=spanTokens[j].t;
+        if(!st){j++;continue;}
+        const parts=st.split(/\s+/).filter(Boolean);
+        let ok=true;
+        for(let k=0;k<parts.length&&ti<targetTokens.length;k++,ti++){
+          if(!fuzzyTokenEq(parts[k],targetTokens[ti])){ok=false;break;}
+        }
+        if(!ok)break;
+        j++;
+      }
+      if(ti===targetTokens.length){hitStart=i;hitEnd=j-1;break;}
     }
-  });
-  // lazy canvas rendering
-  const SCALE=1.6;
+    if(hitStart<0)return false;
+    for(let i=hitStart;i<=hitEnd;i++){
+      const sp=spanTokens[i].s;const r=sp.getBoundingClientRect(),pr=pw.getBoundingClientRect();
+      if(r.width<1||r.height<1)continue;
+      const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;
+      d.style.cssText=`left:${((r.left-pr.left)/pr.width)*100}%;top:${((r.top-pr.top)/pr.height)*100}%;width:${(r.width/pr.width)*100}%;height:${(r.height/pr.height)*100}%`;
+      d.title=ch.type+': '+(ch.rmText||ch.addText).slice(0,100);d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);
+    }
+    return true;
+  };
+  const applyGeminiToPage=async(pw,pageIndex)=>{
+    if(pw.dataset.geminiApplied==='1')return;
+    pw.dataset.geminiApplied='1';
+    for(const ch of S.changes){
+      const target=side==='old'?ch.pdfOldTarget:ch.pdfNewTarget;
+      const pageHint=side==='old'?ch.oldPageHint:ch.newPageHint;
+      if(!target)continue;
+      if(pageHint>0&&pageHint-1!==pageIndex)continue;
+      let found=await highlightTarget(pw,target,pageIndex,ch,side);
+      if(!found){
+        const anchor=side==='old'?ch.oldAnchorText:ch.newAnchorText;
+        if(anchor&&anchor!==target)found=await highlightTarget(pw,anchor,pageIndex,ch,side);
+      }
+      if(!found){
+        // Absolute last resort: use the extracted PDF coordinates for this exact change.
+        // Normally Gemini text is located against the real PDF.js text layer above.
+        const boxes=(ch[boxKey]||[]).filter(x=>x.p===pageIndex);
+        boxes.forEach(({p,b})=>{const d=document.createElement('div');d.className='pdf-hl hl-'+ch.type;d.dataset.id=ch.id;d.style.cssText=`left:${b[0]*100-.15}%;top:${b[1]*100-.1}%;width:${(b[2]-b[0])*100+.3}%;height:${(b[3]-b[1])*100+.2}%`;d.addEventListener('click',()=>setActive(ch.id));pw.appendChild(d);});
+      }
+    }
+  };
   const draw=async el=>{
     if(el.dataset.done)return;el.dataset.done='1';
     try{
-      const page=await content.pdfDoc.getPage(+el.dataset.page+1),vp=page.getViewport({scale:SCALE});
-      const cv=document.createElement('canvas');cv.width=vp.width;cv.height=vp.height;
-      cv.style.cssText='position:absolute;inset:0;width:100%;height:100%';
-      await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
-      el.insertBefore(cv,el.firstChild);
-    }catch(e){console.warn('page render failed',e);}
+      const page=await content.pdfDoc.getPage(+el.dataset.page+1),vp=page.getViewport({scale:1.6});
+      const cv=document.createElement('canvas');cv.width=vp.width;cv.height=vp.height;cv.style.cssText='position:absolute;inset:0;width:100%;height:100%;z-index:1';
+      await page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;el.insertBefore(cv,el.firstChild);
+      const tl=document.createElement('div');tl.className='pdf-text-layer';tl.style.cssText='position:absolute;inset:0;z-index:2;overflow:hidden;pointer-events:none';el.appendChild(tl);
+      const tc=await page.getTextContent();
+      if(window.pdfjsLib.renderTextLayer){
+        const task=window.pdfjsLib.renderTextLayer({textContentSource:tc,container:tl,viewport:vp,textDivs:[]});
+        if(task?.promise)await task.promise;
+      }else{
+        // PDF.js fallback: create positioned transparent spans from text items.
+        tc.items.filter(i=>i.str&&i.str.trim()).forEach(it=>{
+          const span=document.createElement('span');span.textContent=it.str;span.style.position='absolute';span.style.color='transparent';span.style.whiteSpace='pre';
+          const t=it.transform;const pt=vp.convertToViewportPoint(t[4],t[5]);const fs=Math.hypot(t[2],t[3])*vp.scale;
+          span.style.left=pt[0]+'px';span.style.top=(pt[1]-fs)+'px';span.style.fontSize=fs+'px';span.style.transformOrigin='0 0';tl.appendChild(span);
+        });
+      }
+      el.dataset.textReady='1';
+      if(S.oldContent?.type==='pdf'&&S.newContent?.type==='pdf')await applyGeminiToPage(el,+el.dataset.page);
+      else addLegacyOverlays();
+    }catch(e){console.warn('page render failed',e);addLegacyOverlays();}
   };
   const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)draw(e.target);}),{root:container,rootMargin:'800px 0px'});
-  pageEls.forEach(el=>io.observe(el));
-  content._draw=draw;content._pageEls=pageEls;
+  pageEls.forEach(el=>io.observe(el));content._draw=draw;content._pageEls=pageEls;
 }
 
 
