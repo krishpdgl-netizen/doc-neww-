@@ -1,8 +1,3 @@
 {
-  "private": true,
-  "dependencies": {
-    "@vercel/blob": "^2.6.1",
-    "@adobe/pdfservices-node-sdk": "4.1.0",
-    "adm-zip": "^0.5.16"
-  }
+  "private": true
 }
