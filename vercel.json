@@ -1,7 +1,7 @@
 {
   "cleanUrls": true,
   "functions": {
-    "api/gemini.js": {
+    "api/adobe-compare.js": {
       "maxDuration": 300
     },
     "api/blob-upload-url.js": {
