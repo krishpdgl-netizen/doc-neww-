@@ -804,20 +804,10 @@ async function extract(file){
   return{type:'text',text,html:null,blocks:textToBlocks(text)};
 }
 
-// ── Gemini PDF comparison (PDF ↔ PDF only) ───────────────────
-// PDFs are uploaded directly from the browser to Vercel Blob using a short-lived
-// signed PUT URL. Only the small Blob pathnames are sent to the Vercel function,
-// so the 4.5 MB Vercel Function request-body limit is not hit.
-const GEMINI_MODEL='gemini-3.5-flash-lite';
-
-function parseGeminiJson(text){
-  let t=String(text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
-  try{return JSON.parse(t);}catch(e){
-    const a=t.indexOf('{'),b=t.lastIndexOf('}'); if(a>=0&&b>a)return JSON.parse(t.slice(a,b+1));
-    const c=t.indexOf('['),d=t.lastIndexOf(']'); if(c>=0&&d>c)return JSON.parse(t.slice(c,d+1));
-    throw new Error('Gemini returned invalid comparison JSON.');
-  }
-}
+// ── Adobe PDF comparison (PDF ↔ PDF only) ───────────────────
+// PDFs are uploaded directly from the browser to private Vercel Blob. The
+// server sends those PDFs to Adobe PDF Extract with character bounding boxes.
+// The final highlight coordinates therefore come from the PDF itself, not an AI guess.
 
 async function uploadPdfToBlob(file){
   const r=await fetch('/api/blob-upload-url',{
@@ -831,35 +821,7 @@ async function uploadPdfToBlob(file){
   return info.pathname;
 }
 
-async function callGeminiPdfCompare(oldFile,newFile){
-  const prompt=`Compare the ORIGINAL PDF and UPDATED PDF as a visual document-diff engine.
-Return ONLY valid JSON matching this schema:
-{"changes":[{"type":"added|deleted|modified|moved","oldText":"","newText":"","oldPage":1,"newPage":1,"oldBoxes":[[ymin,xmin,ymax,xmax]],"newBoxes":[[ymin,xmin,ymax,xmax]]}]}
-
-CRITICAL COORDINATE RULES:
-- The PDFs are supplied as visual documents. Inspect the rendered page layout, not just extracted text.
-- For EVERY change, return the exact visible region(s) containing the changed text.
-- Coordinates must be normalized to 0..1000 and use [ymin, xmin, ymax, xmax].
-- Coordinates are relative to the FULL PAGE, not to a paragraph, text block, or crop.
-- oldBoxes belong to the ORIGINAL PDF and newBoxes belong to the UPDATED PDF.
-- Use one box per changed line/region when a change wraps across multiple lines.
-- For added changes, oldBoxes must be [] and newBoxes must identify the added text.
-- For deleted changes, newBoxes must be [] and oldBoxes must identify the deleted text.
-- For modified changes, provide both sets of boxes.
-- For moved changes, provide the source and destination boxes.
-- Do not invent boxes. If you cannot visually locate a change, omit that change.
-
-TEXT RULES:
-- oldText and newText must be copied EXACTLY from the PDFs. Never paraphrase.
-- Keep each change focused on the smallest meaningful changed phrase or sentence.
-- Do not return an entire paragraph when only a company name, number, date, clause, or phrase changed.
-- Ignore font, spacing, line wrapping, page breaks and rendering artifacts unless actual content changed.
-- Do not report unchanged repeated words merely because they occur elsewhere.
-- Use 1-based page numbers.
-- Do not duplicate changes.
-
-Accuracy is more important than completeness. A missing change is preferable to a wrong coordinate.`;
-
+async function callAdobePdfCompare(oldFile,newFile){
   let oldPath=null,newPath=null;
   try{
     [oldPath,newPath]=await Promise.all([
@@ -868,25 +830,24 @@ Accuracy is more important than completeness. A missing change is preferable to 
     ]);
 
     const ctl=new AbortController();
-    const tm=setTimeout(()=>ctl.abort(),180000);
-
-    const resp=await fetch('/api/gemini',{
+    const tm=setTimeout(()=>ctl.abort(),270000);
+    const resp=await fetch('/api/adobe-compare',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       signal:ctl.signal,
-      body:JSON.stringify({model:GEMINI_MODEL,prompt,oldPath,newPath})
+      body:JSON.stringify({oldPath,newPath})
     }).catch(e=>{
-      throw new Error(e.name==='AbortError'?'AI check timed out':e.message);
+      throw new Error(e.name==='AbortError'?'Adobe PDF comparison timed out':e.message);
     }).finally(()=>clearTimeout(tm));
 
     const raw=await resp.text();
     let payload={};
     try{payload=JSON.parse(raw);}catch(e){}
-    if(!resp.ok)throw new Error(payload.error||`Gemini server request failed (${resp.status}).`);
-
-    const parsed=parseGeminiJson(payload.text||'');
-    return Array.isArray(parsed)?parsed:(parsed.changes||[]);
+    if(!resp.ok)throw new Error(payload.error||`Adobe PDF comparison failed (${resp.status}).`);
+    return Array.isArray(payload.changes)?payload.changes:[];
   }finally{
+    // The server also cleans these up. This is only a best-effort fallback
+    // for failures that happen before /api/adobe-compare is reached.
     if(oldPath||newPath){
       fetch('/api/blob-delete',{
         method:'POST',
@@ -897,18 +858,38 @@ Accuracy is more important than completeness. A missing change is preferable to 
   }
 }
 
-function geminiVisualBox(box){
-  if(!Array.isArray(box)||box.length!==4)return null;
-  const nums=box.map(Number);
-  if(nums.some(n=>!Number.isFinite(n)))return null;
-  // Gemini returns PDF/image boxes as [ymin,xmin,ymax,xmax] in 0..1000 space.
-  let [y0,x0,y1,x1]=nums;
-  x0=Math.max(0,Math.min(1000,x0));
-  x1=Math.max(0,Math.min(1000,x1));
-  y0=Math.max(0,Math.min(1000,y0));
-  y1=Math.max(0,Math.min(1000,y1));
-  if(x1<=x0||y1<=y0)return null;
-  return [x0/1000,y0/1000,x1/1000,y1/1000];
+function adobeChangesToUi(changes){
+  const out=[];
+  for(const c of changes||[]){
+    const type=['added','deleted','modified','moved'].includes(c.type)?c.type:'modified';
+    const oldText=String(c.oldText||'').trim();
+    const newText=String(c.newText||'').trim();
+    const oldBoxes=Array.isArray(c.oldBoxes)?c.oldBoxes.map(b=>({p:Math.max(0,Number(c.oldPage||1)-1),b})).filter(x=>Array.isArray(x.b)&&x.b.length===4):[];
+    const newBoxes=Array.isArray(c.newBoxes)?c.newBoxes.map(b=>({p:Math.max(0,Number(c.newPage||1)-1),b})).filter(x=>Array.isArray(x.b)&&x.b.length===4):[];
+    if(!oldText&&!newText)continue;
+    if(!oldBoxes.length&&!newBoxes.length)continue;
+    const cl=classifyChange(oldText,newText,oldText,newText,type);
+    out.push({
+      id:out.length+1,
+      type,
+      oldText,
+      newText,
+      rmText:oldText,
+      addText:newText,
+      rmWords:[],
+      addWords:[],
+      oldBoxes,
+      newBoxes,
+      oldAnchor:oldBoxes[0]||null,
+      newAnchor:newBoxes[0]||null,
+      page:newBoxes[0]?.p??oldBoxes[0]?.p??0,
+      ocr:false,
+      conf:100,
+      adobe:true,
+      ...cl
+    });
+  }
+  return out;
 }
 
 function geminiVisualBoxes(raw,pageNumber){
@@ -1370,23 +1351,22 @@ async function runCompare(){
     const bothPdf=oc.type==='pdf'&&nc.type==='pdf';
     S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
 
-    // PDF ↔ PDF: Gemini is the visual source of truth for both WHAT changed
-    // and WHERE it changed. The local PDF diff is retained only as a fallback
-    // if Gemini is unavailable or returns no visually locatable changes.
+    // PDF ↔ PDF: Adobe supplies the actual PDF character geometry.
+    // No LLM is used to guess highlight coordinates.
     if(bothPdf){
-      setStage(4,'AI visual comparison','Gemini is comparing the PDF pages and locating each change visually…');
+      setStage(4,'PDF geometry comparison','Adobe is extracting the real PDF text and character positions…');
       try{
-        const gc=await callGeminiPdfCompare(S.oldFile,S.newFile);
-        const visual=geminiVisualChanges(gc,oc,nc);
+        const adobeChanges=await callAdobePdfCompare(S.oldFile,S.newFile);
+        const visual=adobeChangesToUi(adobeChanges);
         if(visual.length){
           S.changes=visual;
-          S.aiNote=`Gemini visual comparison: ${visual.length} change${visual.length===1?'':'s'} located`;
+          S.aiNote=`Adobe PDF comparison: ${visual.length} change${visual.length===1?'':'s'} located from PDF geometry`;
         }else{
-          S.aiNote='Gemini found no safely locatable visual changes';
+          S.aiNote='Adobe found no safely locatable textual changes';
         }
       }catch(e){
-        console.warn('Gemini visual check failed:',e);
-        S.aiNote='AI visual check unavailable: local result shown';
+        console.warn('Adobe PDF comparison failed:',e);
+        S.aiNote='Adobe PDF comparison unavailable: local result shown';
         S.aiErr=e.message;
       }
     }
