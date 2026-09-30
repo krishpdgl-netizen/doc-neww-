@@ -1,632 +1,165 @@
-const {
-  issueSignedToken,
-  presignUrl
-} = require('@vercel/blob');
+// POST /api/gemini  { image: <base64 jpeg/png of ONE page>, mime?: 'image/jpeg' }
+// Returns          { lines: [{ text, box_2d: [ymin, xmin, ymax, xmax] }], model }
+// box_2d is normalised to 0..1000 relative to the image that was sent.
+//
+// Env vars (Vercel > Project > Settings > Environment Variables):
+//   GEMINI_API_KEY      required
+//   GEMINI_MODEL        optional, default gemini-3.1-flash-lite
+//   GEMINI_TEMPERATURE  optional, leave unset to use the model default
 
-const MODEL_DEFAULT =
-  process.env.GEMINI_MODEL ||
-  'gemini-3.1-flash-lite';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+const MAX_B64 = 4 * 1024 * 1024; // Vercel request bodies are limited to about 4.5 MB
 
-const MAX_PDF_BYTES =
-  50 * 1024 * 1024;
+const PROMPT = `You are the text-reading stage of a document comparison tool. Read this single page image and transcribe ALL text on it.
 
-const READ_TTL_MS =
-  5 * 60 * 1000;
+Return one entry per visual line of text, in natural reading order. Table cells that sit on the same row belong to ONE line, in left-to-right order.
+For every line give box_2d as [ymin, xmin, ymax, xmax], integers from 0 to 1000, relative to the image, drawn tightly around that line's ink (not around neighbouring lines).
 
-const DELETE_TTL_MS =
-  60 * 1000;
+Rules:
+- Copy the characters exactly as they appear: same words, numbers, currency symbols, punctuation and capitalisation. Keep list numbers and bullets.
+- Never correct spelling, never translate, never summarise, never add words that are not visible, never guess missing words.
+- Do not merge or split words. Keep hyphenated words as printed.
+- The page may be a phone photo or a tilted scan. Ignore scanner borders, shadows, dust and page edges.
+- Include stamps, handwriting, filled-in form values, headers, footers and page numbers.
+- Write a blank fill-in line as a run of underscores inside its line. Write a signature as [signature] and unreadable text as [illegible].
+- If the page has no text return an empty list.`;
+
+const SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    lines: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          text: { type: 'STRING' },
+          box_2d: { type: 'ARRAY', items: { type: 'INTEGER' } },
+        },
+        required: ['text', 'box_2d'],
+      },
+    },
+  },
+  required: ['lines'],
+};
 
 function send(res, status, body) {
-  return res.status(status).json(body);
+  res.status(status).json(body);
 }
 
-function parseBody(req) {
-  if (!req.body) return {};
-
-  if (typeof req.body === 'string') {
-    try {
-      return JSON.parse(req.body);
-    } catch (_) {
-      return {};
-    }
+// Pull complete {text, box_2d} objects out of a truncated or slightly malformed JSON reply.
+function salvage(text) {
+  const out = [];
+  const re = /\{\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"box_2d"\s*:\s*\[([^\]]*)\]\s*\}/g;
+  const re2 = /\{\s*"box_2d"\s*:\s*\[([^\]]*)\]\s*,\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}/g;
+  let m;
+  while ((m = re.exec(text))) {
+    try { out.push({ text: JSON.parse('"' + m[1] + '"'), box_2d: m[2].split(',').map(Number) }); } catch (_) {}
   }
-
-  return req.body;
+  while ((m = re2.exec(text))) {
+    try { out.push({ text: JSON.parse('"' + m[2] + '"'), box_2d: m[1].split(',').map(Number) }); } catch (_) {}
+  }
+  return out;
 }
 
-
-/*
- * Read the exact private Blob object through
- * a short-lived signed GET URL.
- *
- * This avoids relying on SDK get() path
- * resolution/access-mode behaviour.
- */
-async function readPrivateBlob(pathname) {
-
-  if (
-    typeof pathname !== 'string' ||
-    !pathname.startsWith('doc-compare/')
-  ) {
-    throw new Error(
-      `Invalid temporary Blob pathname: ${pathname || '(empty)'}`
-    );
-  }
-
-  const validUntil =
-    Date.now() + READ_TTL_MS;
-
-  const token =
-    await issueSignedToken({
-      pathname,
-      operations: ['get'],
-      validUntil
-    });
-
-  const { presignedUrl } =
-    await presignUrl(token, {
-      pathname,
-      operation: 'get',
-      validUntil,
-      useCache: false
-    });
-
-  const response =
-    await fetch(
-      presignedUrl,
-      {
-        method: 'GET',
-        cache: 'no-store'
-      }
-    );
-
-  if (!response.ok) {
-
-    const text =
-      await response
-        .text()
-        .catch(() => '');
-
-    throw new Error(
-      `Private Blob read failed for ${pathname}: HTTP ${response.status}` +
-      `${text ? ` - ${text}` : ''}`
-    );
-  }
-
-  const contentLength =
-    Number(
-      response
-        .headers
-        .get('content-length') || 0
-    );
-
-  if (
-    contentLength >
-    MAX_PDF_BYTES
-  ) {
-    throw new Error(
-      `Blob ${pathname} is larger than Gemini's 50 MB PDF input limit.`
-    );
-  }
-
-  const buffer =
-    Buffer.from(
-      await response.arrayBuffer()
-    );
-
-  if (!buffer.length) {
-    throw new Error(
-      `Private Blob ${pathname} was empty.`
-    );
-  }
-
-  if (
-    buffer.length >
-    MAX_PDF_BYTES
-  ) {
-    throw new Error(
-      `Blob ${pathname} is larger than Gemini's 50 MB PDF input limit.`
-    );
-  }
-
-  /*
-   * Make sure the response is actually
-   * a PDF and not an HTML/error response.
-   */
-  if (
-    buffer
-      .subarray(0, 5)
-      .toString('ascii') !== '%PDF-'
-  ) {
-    throw new Error(
-      `Private Blob ${pathname} did not return a valid PDF.`
-    );
-  }
-
-  return buffer;
-}
-
-
-/*
- * Upload PDF to Gemini Files API.
- */
-async function uploadToGemini(
-  buffer,
-  displayName,
-  apiKey
-) {
-
-  const start =
-    await fetch(
-      'https://generativelanguage.googleapis.com/upload/v1beta/files',
-      {
-        method: 'POST',
-
-        headers: {
-          'x-goog-api-key':
-            apiKey,
-
-          'X-Goog-Upload-Protocol':
-            'resumable',
-
-          'X-Goog-Upload-Command':
-            'start',
-
-          'X-Goog-Upload-Header-Content-Length':
-            String(buffer.length),
-
-          'X-Goog-Upload-Header-Content-Type':
-            'application/pdf',
-
-          'Content-Type':
-            'application/json'
-        },
-
-        body: JSON.stringify({
-          file: {
-            display_name:
-              displayName
-          }
-        })
-      }
-    );
-
-  if (!start.ok) {
-
-    const raw =
-      await start.text();
-
-    throw new Error(
-      `Gemini file-upload start ${start.status}: ${raw}`
-    );
-  }
-
-  const uploadUrl =
-    start.headers.get(
-      'x-goog-upload-url'
-    );
-
-  if (!uploadUrl) {
-    throw new Error(
-      'Gemini did not return an upload URL.'
-    );
-  }
-
-  const finish =
-    await fetch(
-      uploadUrl,
-      {
-        method: 'POST',
-
-        headers: {
-          'Content-Length':
-            String(buffer.length),
-
-          'X-Goog-Upload-Offset':
-            '0',
-
-          'X-Goog-Upload-Command':
-            'upload, finalize',
-
-          'Content-Type':
-            'application/pdf'
-        },
-
-        body: buffer
-      }
-    );
-
-  const raw =
-    await finish.text();
-
-  let data = null;
-
+function parseLines(text) {
+  const t = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   try {
-    data =
-      JSON.parse(raw);
+    const j = JSON.parse(t);
+    if (Array.isArray(j)) return j;
+    if (j && Array.isArray(j.lines)) return j.lines;
   } catch (_) {}
-
-  if (!finish.ok) {
-
-    throw new Error(
-      `Gemini file upload ${finish.status}: ` +
-      `${
-        data?.error?.message ||
-        raw ||
-        'unknown error'
-      }`
-    );
-  }
-
-  if (!data?.file?.uri) {
-
-    throw new Error(
-      'Gemini file upload completed without a file URI.'
-    );
-  }
-
-  return data.file.uri;
+  return salvage(t);
 }
 
+function clean(lines) {
+  const out = [];
+  let repeat = 0;
+  for (const l of lines) {
+    const text = String((l && l.text) || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    // models occasionally loop; drop a line repeated more than twice in a row
+    const prev = out[out.length - 1];
+    if (prev && prev.text === text && text.length > 12) { if (++repeat >= 2) continue; } else repeat = 0;
+    const b = Array.isArray(l.box_2d) ? l.box_2d.map(Number) : null;
+    const ok = b && b.length === 4 && b.every(Number.isFinite);
+    out.push({ text, box_2d: ok ? b.map((v) => Math.max(0, Math.min(1000, Math.round(v)))) : null });
+  }
+  return out;
+}
 
-/*
- * Clean up the temporary private Blob.
- */
-async function cleanupBlob(pathname) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  if (
-    typeof pathname !== 'string' ||
-    !pathname.startsWith('doc-compare/')
-  ) {
-    return;
+module.exports = async function handler(req, res) {
+  if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed.' });
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return send(res, 500, { error: 'GEMINI_API_KEY is not configured in Vercel Environment Variables.' });
   }
 
+  let body;
   try {
-
-    const validUntil =
-      Date.now() +
-      DELETE_TTL_MS;
-
-    const token =
-      await issueSignedToken({
-        pathname,
-        operations: ['delete'],
-        validUntil
-      });
-
-    const { presignedUrl } =
-      await presignUrl(token, {
-        pathname,
-        operation: 'delete',
-        validUntil
-      });
-
-    const response =
-      await fetch(
-        presignedUrl,
-        {
-          method: 'DELETE'
-        }
-      );
-
-    if (
-      !response.ok &&
-      response.status !== 404
-    ) {
-
-      console.warn(
-        `Blob cleanup failed for ${pathname}: HTTP ${response.status}`
-      );
-    }
-
-  } catch (err) {
-
-    console.warn(
-      `Blob cleanup exception for ${pathname}:`,
-      err?.message || err
-    );
+    body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
+  } catch (_) {
+    return send(res, 400, { error: 'Invalid JSON body.' });
   }
-}
 
+  const image = String(body.image || '');
+  const mime = body.mime === 'image/png' ? 'image/png' : 'image/jpeg';
+  if (!image) return send(res, 400, { error: 'Missing page image.' });
+  if (image.length > MAX_B64) return send(res, 413, { error: 'Page image is too large for one request.' });
 
-module.exports =
-  async function handler(req, res) {
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: SCHEMA,
+    maxOutputTokens: 16384,
+  };
+  if (process.env.GEMINI_TEMPERATURE !== undefined && process.env.GEMINI_TEMPERATURE !== '') {
+    generationConfig.temperature = Number(process.env.GEMINI_TEMPERATURE);
+  }
 
-    if (req.method !== 'POST') {
-      return send(res, 405, {
-        error: 'Method not allowed.'
-      });
-    }
+  const endpoint =
+    'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(MODEL) + ':generateContent';
+  const payload = JSON.stringify({
+    contents: [{ role: 'user', parts: [{ inlineData: { mimeType: mime, data: image } }, { text: PROMPT }] }],
+    generationConfig,
+  });
 
-    const apiKey =
-      process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
-
-      return send(res, 500, {
-        error:
-          'GEMINI_API_KEY is not configured in Vercel Environment Variables.'
-      });
-    }
-
-    let oldPath = null;
-    let newPath = null;
-
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-
-      const body =
-        parseBody(req);
-
-      const prompt =
-        String(
-          body.prompt || ''
-        );
-
-      oldPath =
-        String(
-          body.oldPath || ''
-        );
-
-      newPath =
-        String(
-          body.newPath || ''
-        );
-
-      const selectedModel =
-        String(
-          body.model ||
-          MODEL_DEFAULT
-        );
-
-      if (
-        !prompt ||
-        !oldPath ||
-        !newPath
-      ) {
-
-        return send(res, 400, {
-          error:
-            'Missing prompt or temporary PDF paths.'
-        });
-      }
-
-      for (
-        const pathname of [
-          oldPath,
-          newPath
-        ]
-      ) {
-
-        if (
-          !pathname.startsWith(
-            'doc-compare/'
-          )
-        ) {
-
-          return send(res, 400, {
-            error:
-              'Invalid temporary PDF path.'
-          });
-        }
-      }
-
-      console.log(
-        'Gemini PDF comparison: reading private Blob objects',
-        {
-          oldPath,
-          newPath,
-          model: selectedModel
-        }
-      );
-
-
-      /*
-       * Read the exact objects that
-       * the upload endpoint created.
-       */
-      const [
-        oldBuffer,
-        newBuffer
-      ] =
-        await Promise.all([
-          readPrivateBlob(
-            oldPath
-          ),
-
-          readPrivateBlob(
-            newPath
-          )
-        ]);
-
-
-      console.log(
-        'Private Blob reads successful',
-        {
-          oldBytes:
-            oldBuffer.length,
-
-          newBytes:
-            newBuffer.length
-        }
-      );
-
-
-      /*
-       * Upload both PDFs to Gemini.
-       */
-      const [
-        oldUri,
-        newUri
-      ] =
-        await Promise.all([
-
-          uploadToGemini(
-            oldBuffer,
-            'original.pdf',
-            apiKey
-          ),
-
-          uploadToGemini(
-            newBuffer,
-            'updated.pdf',
-            apiKey
-          )
-
-        ]);
-
-
-      /*
-       * Gemini comparison request.
-       */
-      const endpoint =
-        'https://generativelanguage.googleapis.com/v1beta/models/' +
-        `${encodeURIComponent(selectedModel)}:generateContent`;
-
-
-      const upstream =
-        await fetch(
-          endpoint,
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json',
-
-              'x-goog-api-key':
-                apiKey
-            },
-
-            body: JSON.stringify({
-
-              contents: [
-
-                {
-                  parts: [
-
-                    {
-                      text:
-                        prompt
-                    },
-
-                    {
-                      fileData: {
-                        mimeType:
-                          'application/pdf',
-
-                        fileUri:
-                          oldUri
-                      }
-                    },
-
-                    {
-                      fileData: {
-                        mimeType:
-                          'application/pdf',
-
-                        fileUri:
-                          newUri
-                      }
-                    }
-
-                  ]
-                }
-
-              ],
-
-              generationConfig: {
-                temperature: 0,
-
-                responseMimeType:
-                  'application/json'
-              }
-
-            })
-          }
-        );
-
-
-      const raw =
-        await upstream.text();
-
+      const upstream = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: payload,
+      });
+      const raw = await upstream.text();
       let data = null;
-
-      try {
-        data =
-          JSON.parse(raw);
-      } catch (_) {}
-
+      try { data = JSON.parse(raw); } catch (_) {}
 
       if (!upstream.ok) {
-
-        const message =
-          data?.error?.message ||
-          raw ||
-          `Gemini API returned ${upstream.status}`;
-
-        return send(
-          res,
-          upstream.status,
-          {
-            error:
-              `Gemini API ${upstream.status}: ${message}`
-          }
-        );
+        const message = (data && data.error && data.error.message) || raw.slice(0, 300) || 'no details';
+        last = { status: upstream.status, error: `Gemini API ${upstream.status}: ${message}` };
+        if ([429, 500, 502, 503, 504].includes(upstream.status) && attempt < 2) {
+          await sleep(1500 * (attempt + 1));
+          continue;
+        }
+        return send(res, upstream.status, { error: last.error });
       }
 
-
-      const text =
-        (data?.candidates || [])
-
-          .flatMap(
-            c =>
-              c?.content?.parts || []
-          )
-
-          .map(
-            p =>
-              p?.text || ''
-          )
-
-          .join('');
-
-
-      return send(res, 200, {
-        text
-      });
-
-
+      const text = ((data && data.candidates) || [])
+        .flatMap((c) => (c && c.content && c.content.parts) || [])
+        .map((p) => (p && p.text) || '')
+        .join('');
+      if (!text) {
+        const why = data && data.promptFeedback && data.promptFeedback.blockReason;
+        return send(res, 502, { error: why ? `Gemini blocked the page (${why}).` : 'Gemini returned an empty reply.' });
+      }
+      return send(res, 200, { lines: clean(parseLines(text)), model: MODEL });
     } catch (err) {
-
-      console.error(
-        'Gemini private-Blob comparison error:',
-        err
-      );
-
-      return send(res, 500, {
-
-        error:
-          err?.message ||
-          'Gemini proxy failed.',
-
-        stage:
-          'private-blob-or-gemini-processing'
-
-      });
-
-    } finally {
-
-      await Promise.allSettled([
-
-        oldPath
-          ? cleanupBlob(oldPath)
-          : Promise.resolve(),
-
-        newPath
-          ? cleanupBlob(newPath)
-          : Promise.resolve()
-
-      ]);
-
+      last = { status: 502, error: (err && err.message) || 'Could not reach Gemini.' };
+      if (attempt < 2) await sleep(1000 * (attempt + 1));
     }
-  };
+  }
+  return send(res, last ? last.status : 502, { error: last ? last.error : 'Gemini request failed.' });
+};
