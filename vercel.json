@@ -1,14 +1,8 @@
 {
   "cleanUrls": true,
   "functions": {
-    "api/adobe-compare.js": {
-      "maxDuration": 300
-    },
-    "api/blob-upload-url.js": {
-      "maxDuration": 30
-    },
-    "api/blob-delete.js": {
-      "maxDuration": 30
+    "api/gemini.js": {
+      "maxDuration": 60
     }
   },
   "headers": [
