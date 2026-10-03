@@ -893,6 +893,41 @@ async function readScannedPage(page,vp,items,nChars,hasNative){
   return res;
 }
 
+// ── Is this page really a picture of text? ─────────────────────
+// Scanner and e-sign apps wrap a page image in a PDF and often add an invisible text layer that is misaligned or full of OCR mistakes.
+// Trusting it gives floating highlights and wrong text. So: (1) a page whose image(s) cover most of the sheet is a scan, whatever text it carries;
+// (2) any other page's text boxes must sit on visible ink, or the page is re-read as a scan.
+async function pageImageCoverage(page){
+  try{
+    const O=window.pdfjsLib.OPS,ops=await page.getOperatorList(),f=ops.fnArray,a=ops.argsArray;
+    const area0=Math.abs((page.view[2]-page.view[0])*(page.view[3]-page.view[1]))||1;
+    const mul=(m,n)=>[m[0]*n[0]+m[2]*n[1],m[1]*n[0]+m[3]*n[1],m[0]*n[2]+m[2]*n[3],m[1]*n[2]+m[3]*n[3],m[0]*n[4]+m[2]*n[5]+m[4],m[1]*n[4]+m[3]*n[5]+m[5]];
+    let ctm=[1,0,0,1,0,0],area=0;const st=[];
+    const IMG=new Set([O.paintImageXObject,O.paintInlineImageXObject,O.paintImageMaskXObject,O.paintJpegXObject,O.paintImageXObjectRepeat].filter(x=>x!==undefined));
+    for(let i=0;i<f.length;i++){
+      const op=f[i];
+      if(op===O.save)st.push(ctm);
+      else if(op===O.restore){if(st.length)ctm=st.pop();}
+      else if(op===O.transform)ctm=mul(ctm,a[i]);
+      else if(op===O.paintFormXObjectBegin){st.push(ctm);if(a[i]&&a[i][0])ctm=mul(ctm,a[i][0]);}
+      else if(op===O.paintFormXObjectEnd){if(st.length)ctm=st.pop();}
+      else if(IMG.has(op))area+=Math.abs(ctm[0]*ctm[3]-ctm[1]*ctm[2]);
+    }
+    return area/area0;
+  }catch(e){return 0;}
+}
+// Render a native page small and check that its text boxes really sit on ink. Unlocated boxes are dropped; a page where many are off is treated as a scan.
+async function nativeLayerOk(page,vp,lines){
+  try{
+    const sc=Math.min(2,Math.max(.5,900/vp.width)),v=page.getViewport({scale:sc});
+    const cv=document.createElement('canvas');cv.width=Math.round(v.width);cv.height=Math.round(v.height);
+    await page.render({canvasContext:cv.getContext('2d'),viewport:v}).promise;
+    const r=validateBoxes(lines,inkMap(cv,900));
+    cv.width=cv.height=0;
+    return r.tot<8||r.bad/r.tot<=.3;
+  }catch(e){return true;}
+}
+
 // ── File reading helpers ───────────────────────────────────────
 function readBuf(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsArrayBuffer(file);});}
 function readTxt(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsText(file);});}
@@ -921,7 +956,7 @@ async function extractPdf(file){
   const forced=!!sel&&sel.dataset.v==='all';
   const detail=$('prog-detail'),track=$('prog-page-track'),bar=$('prog-page-bar');
   if(track)track.style.display='block';
-  const fb0=GEM.fallback;let done=0,ocrPages=0,aiPages=0;
+  const fb0=GEM.fallback;let done=0,ocrPages=0,aiPages=0,layerIgnored=0;
   const tick=msg=>{done++;if(bar)bar.style.width=Math.round(done/pageCount*100)+'%';if(detail&&msg)detail.innerHTML=msg;};
   const pool=makePool(3),jobs=[];
   for(let p=1;p<=pageCount;p++){
@@ -931,10 +966,19 @@ async function extractPdf(file){
     const items=tc.items.filter(i=>i.str&&i.str.trim());
     const nChars=items.reduce((n,i)=>n+i.str.trim().length,0);
     pages[p-1]={w:vp.width,h:vp.height,ocr:false,ai:false};
-    if(nChars>=30&&!forced){PL[p-1]={lines:nativeLines(items,vp),ocr:false};tick(`${esc(file.name)}: page ${p} of ${pageCount}`);continue;}
+    let ignored=false;
+    if(nChars>=30&&!forced){
+      if(await pageImageCoverage(page)>=.45)ignored=true;               // a picture of a page: its text layer is not trustworthy
+      else{
+        const nl=nativeLines(items,vp);
+        if(pageCount>60&&p%4!==1||await nativeLayerOk(page,vp,nl)){PL[p-1]={lines:nl,ocr:false};tick(`${esc(file.name)}: page ${p} of ${pageCount}`);continue;}
+        ignored=true;                                                       // text boxes are not on the visible text
+      }
+    }
+    if(ignored)layerIgnored++;
     jobs.push(pool(async()=>{
       let r;
-      try{r=await readScannedPage(page,vp,items,nChars,nChars>=30);}
+      try{r=await readScannedPage(page,vp,items,nChars,nChars>=30&&!ignored);}
       catch(e){console.warn('page read failed',p,e);r={lines:nChars?nativeLines(items,vp):[],ocr:false};}
       PL[p-1]={lines:r.lines,ocr:r.ocr};
       pages[p-1].ocr=!!r.ocr;pages[p-1].ai=r.ocr==='ai';
@@ -949,7 +993,7 @@ async function extractPdf(file){
   const fb=GEM.fallback-fb0;
   if(detail)detail.innerHTML=ocrPages?`Read ${pageCount} pages <span class="ocr-badge"><i class="ti ti-eye"></i> ${aiPages?`Gemini on ${aiPages}`:''}${aiPages&&ocrPages>aiPages?', ':''}${ocrPages>aiPages?`local OCR on ${ocrPages-aiPages}`:''}</span>`:`Read ${pageCount} pages (native text layer)`;
   const text=blocks.map(b=>b.text).join('\n');
-  return{type:'pdf',text,html:null,pdfDoc,pageCount,pages,blocks,ocrPageCount:ocrPages,aiPageCount:aiPages,aiFallbacks:fb};
+  return{type:'pdf',text,html:null,pdfDoc,pageCount,pages,blocks,ocrPageCount:ocrPages,aiPageCount:aiPages,aiFallbacks:fb,layerIgnored};
 }
 async function extractPptx(buf){
   if(!window.JSZip)throw new Error('PPTX reader failed to load');
@@ -1352,6 +1396,8 @@ async function runCompare(){
     S.aiNote='';S.aiErr='';
     if(aiP)S.aiNote=`Gemini read ${aiP} page${aiP>1?'s':''}`;
     if(fbk){S.aiNote+=(S.aiNote?' · ':'')+`${fbk} page${fbk>1?'s':''} used local OCR`;S.aiErr=GEM.err;}
+    const lig=(oc.layerIgnored||0)+(nc.layerIgnored||0);
+    if(lig)S.aiNote+=(S.aiNote?' · ':'')+`${lig} scanned page${lig>1?'s':''}: hidden text layer ignored`;
 
     // Stage 4-5: Classify
     setStage(4);
