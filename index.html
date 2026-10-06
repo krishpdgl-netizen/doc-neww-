@@ -466,7 +466,7 @@ function wordEq(a,b,ocr){
   // scans confuse "," and "." inside numbers (14,400 vs 14.400): compare digits only
   if(/\d/.test(a)&&/\d/.test(b))return a.replace(/[.,]/g,'')===b.replace(/[.,]/g,'');
   if(a.length<4||b.length<4)return false;
-  if(a.startsWith(b)||b.startsWith(a))return false; // pure suffix/prefix change (terminate/terminated) is a real edit, not OCR noise
+  if(a.startsWith(b)||b.startsWith(a)||a.endsWith(b)||b.endsWith(a))return false; // an added/removed prefix or suffix (terminate/terminated, exclusive/non-exclusive) is a real edit, not OCR noise
   return dice(a,b)>=0.8;
 }
 function isEnum(t,next){
@@ -477,9 +477,9 @@ function isEnum(t,next){
 // Leading list numbers ("4.", "(a)", "2.1") are shown but excluded from comparison, so renumbering never looks like a change.
 function mkBlock(words,ocr,page){
   const ws=[];
-  for(const w of words){const k=normWord(w.t);if(!k)continue;ws.push({t:w.t,k,bx:w.bx||null,p:w.p!==undefined?w.p:page,conf:w.conf});}
+  for(const w of words){const k=normWord(w.t);if(!k)continue;ws.push({t:w.t,k,bx:w.bx||null,p:w.p!==undefined?w.p:page,conf:w.conf,skip:!!w.enum});}
   if(!ws.length)return null;
-  if(ws.length===1&&isEnum(ws[0].t,''))return null;
+  if(ws.length===1&&(ws[0].skip||isEnum(ws[0].t,'')))return null;
   if(ws.length>=2&&isEnum(ws[0].t,ws[1].t))ws[0].skip=true;
   const dw=ws.filter(w=>!w.skip),key=dw.map(w=>w.k).join(' ');
   return{words:ws,dw,text:ws.map(w=>w.t).join(' '),key,dg:digs(key),ocr:!!ocr,ai:ocr==='ai',page};
@@ -519,16 +519,25 @@ function linesToBlocks(lines,ocr,p){
   const pitches=[];for(let i=1;i<lines.length;i++){const d=lines[i].cy-lines[i-1].cy;if(d>0)pitches.push(d);}
   pitches.sort((a,b)=>a-b);
   const med=pitches.length>=3?pitches[Math.floor(pitches.length/2)]:0;
+  const lefts=lines.filter(l=>l.words.length>=5).map(l=>l.x0).sort((x,y)=>x-y);
+  const colLeft=lefts.length>=3?lefts[Math.floor(lefts.length/2)]:null;
+  // a clause number hanging in the left margin ("19.", "(a)", or an OCR variant such as "19" / "19,"), alone on its own line or in front of the text
+  const hang=l=>{
+    const w=l.words[0];if(!w)return false;
+    if(l.words.length===1)return(/\d/.test(w.t)&&isEnum(w.t,'A'))||(colLeft!==null&&!!w.box&&/^\(?\d{1,3}[.),:;]?$/.test(w.t)&&w.box[2]<=colLeft+.004);
+    if(isEnum(w.t,l.words[1].t))return true;
+    return colLeft!==null&&!!w.box&&/^\(?\d{1,3}[.),]?$|^\(?[A-Za-z][.)]$/.test(w.t)&&w.box[2]<=colLeft+.004&&!!l.words[1].box&&l.words[1].box[0]>=w.box[2];
+  };
   const flush=()=>{if(cur.length){const b=mkBlock(cur,ocr,p);if(b)blocks.push(b);}cur=[];};
   for(const l of lines){
     if(prev){
       const gap=l.cy-prev.cy,last=prev.words[prev.words.length-1].t;
       const endsSent=/[.:;!?]["')\]]?$/.test(last),short=(prev.x1-prev.x0)<0.72*maxW;
       const bigGap=med?gap>1.3*med:gap>1.6*Math.max(l.h,prev.h);
-      const startsEnum=l.words.length>=2&&isEnum(l.words[0].t,l.words[1].t);
+      const startsEnum=hang(l);
       if(bigGap||gap<-0.5*l.h||(endsSent&&short)||l.iso||prev.iso||startsEnum||!!l.tab!==!!prev.tab)flush();
     }
-    const ws=l.words.map(w=>({t:w.t,bx:w.box?[w.box]:null,conf:w.conf}));
+    const hg=hang(l),ws=l.words.map((w,i)=>({t:w.t,bx:w.box?[w.box]:null,conf:w.conf,enum:hg&&i===0}));
     if(cur.length&&prev&&ws.length&&/\p{L}{2,}-$/u.test(cur[cur.length-1].t)&&/^\p{Ll}/u.test(ws[0].t)){
       const lw=cur[cur.length-1],f=ws.shift();
       lw.t=lw.t.slice(0,-1)+f.t;lw.bx=(lw.bx||f.bx)?(lw.bx||[]).concat(f.bx||[]):null;
@@ -695,7 +704,7 @@ function binarize(cv){
 // Gemini transcribes one page image (text + rough line boxes). The page is deskewed first; then every line box is snapped to the
 // real ink and cut into word boxes using the gaps in the ink, so highlights sit on the actual words even if Gemini's boxes are a few pixels off.
 const GEM={off:false,err:'',fallback:0,consec:0};
-function resetGem(){GEM.off=false;GEM.err='';GEM.fallback=0;GEM.consec=0;}
+function resetGem(){GEM.off=false;GEM.err='';GEM.fallback=0;GEM.consec=0;GEM.pre=false;GEM.model='';}
 function scaleCanvas(cv,W){
   if(cv.width<=W)return cv;
   const o=document.createElement('canvas');o.width=W;o.height=Math.round(cv.height*W/cv.width);
@@ -1639,6 +1648,11 @@ async function runCompare(){
     // Stage 0: Reading files
     setStage(0);
     await new Promise(r=>setTimeout(r,0));
+    // Is Gemini reachable? Find out now and say so, instead of silently falling back to local OCR page after page.
+    if(/\.pdf$/i.test(S.oldFile.name)||/\.pdf$/i.test(S.newFile.name)){
+      try{const h=await geminiCall({mode:'health'},45000);GEM.model=h.model||'';}
+      catch(e){GEM.err=(e&&e.message)||String(e);if(e&&(e.fatal||/not found|not configured|not available/i.test(GEM.err))){GEM.off=true;GEM.pre=true;}}
+    }
 
     // Extract sequentially so per-page progress is clear (not parallel)
     const oc=await extract(S.oldFile);
@@ -1670,7 +1684,7 @@ async function runCompare(){
     setStage(3);
     await new Promise(r=>setTimeout(r,0));
     S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
-    S.cmpNote='';S.cmpErr='';
+    S.cmpNote='';S.cmpErr='';S.aiBad=false;
     if(!isXlsx&&(oc.type==='pdf'||nc.type==='pdf')&&!GEM.off){
       setStage(3,'Gemini is comparing the documents','Checking every difference, ignoring scan and layout noise…');
       try{
@@ -1686,7 +1700,8 @@ async function runCompare(){
     const aiP=(oc.aiPageCount||0)+(nc.aiPageCount||0),fbk=(oc.aiFallbacks||0)+(nc.aiFallbacks||0);
     S.aiNote='';S.aiErr='';
     if(aiP)S.aiNote=`Gemini read ${aiP} page${aiP>1?'s':''}`;
-    if(fbk){S.aiNote+=(S.aiNote?' · ':'')+`${fbk} page${fbk>1?'s':''} used local OCR`;S.aiErr=GEM.err;}
+    if(GEM.pre){S.aiNote='Gemini unavailable: '+String(GEM.err).replace(/^Gemini API \d+:\s*/,'').slice(0,110)+' · local OCR used';S.aiErr=GEM.err;S.aiBad=true;}
+    else if(fbk){S.aiNote+=(S.aiNote?' · ':'')+`${fbk} page${fbk>1?'s':''} used local OCR (${String(GEM.err).replace(/^Gemini API \d+:\s*/,'').slice(0,90)})`;S.aiErr=GEM.err;S.aiBad=true;}
     const lig=(oc.layerIgnored||0)+(nc.layerIgnored||0);
     if(lig)S.aiNote+=(S.aiNote?' · ':'')+`${lig} scanned page${lig>1?'s':''}: hidden text layer ignored`;
 
@@ -1730,7 +1745,7 @@ function buildViewer(){
   if(cnt.financial)mr.innerHTML+=`<span class="mpill mp-fin">${cnt.financial} financial</span>`;
   if(cnt.high)mr.innerHTML+=`<span class="mpill mp-hi">${cnt.high} high impact</span>`;
   if(S.cmpNote)mr.innerHTML+=`<span class="mpill" title="${esc(S.cmpErr||'')}" style="background:var(--purple-bg);color:var(--purple)">${esc(S.cmpNote)}</span>`;
-  if(S.aiNote)mr.innerHTML+=`<span class="mpill" title="${esc(S.aiErr||'')}" style="background:var(--purple-bg);color:var(--purple)">${esc(S.aiNote)}</span>`;
+  if(S.aiNote)mr.innerHTML+=`<span class="mpill" title="${esc(S.aiErr||'')}" style="${S.aiBad?'background:var(--amber-bg);color:var(--amber)':'background:var(--purple-bg);color:var(--purple)'}">${esc(S.aiNote)}</span>`;
   const fr=$('filter-row');fr.innerHTML='';
   [['all','All'],['added','Added'],['deleted','Deleted'],['modified','Modified'],['numeric','Numeric'],['financial','Financial'],['high_impact','High impact']].forEach(([f,l])=>{
     const b=document.createElement('div');b.className='fc'+(f==='all'?' on':'');b.dataset.f=f;b.textContent=l;
