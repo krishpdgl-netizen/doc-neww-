@@ -266,7 +266,8 @@ mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0
 .pdf-hl.hl-deleted{background:rgba(239,68,68,.33);border-bottom:2px solid #dc2626}
 .pdf-hl.hl-modified{background:rgba(245,158,11,.38);border-bottom:2px solid #d97706}
 .pdf-hl.hl-moved{background:rgba(167,139,250,.38);border-bottom:2px solid #7c3aed}
-.pdf-anchor{position:absolute;z-index:4;cursor:pointer;border-top:2px dashed rgba(245,158,11,.9);pointer-events:auto}
+.pdf-anchor{position:absolute;z-index:4;pointer-events:none;border-top:2px dashed transparent}
+.pdf-anchor.focus-ring{border-top-color:rgba(245,158,11,.9);outline:none!important}
 </style>
 </head>
 <body>
@@ -344,8 +345,8 @@ mark.ad{background:rgba(34,197,94,.22);color:#15803d;border-radius:2px;padding:0
           <div>
             <div class="config-title">PDF reading</div>
             <div class="chip-row">
-              <div class="chip on" data-grp="pdfread" data-v="auto" title="Exact text layer where a page has one, Gemini for scanned pages">Auto</div>
-              <div class="chip" data-grp="pdfread" data-v="all" title="Send every PDF page to Gemini (slower, uses API quota)">Gemini on every page</div>
+              <div class="chip on" data-grp="pdfread" data-v="all" title="Gemini reads every PDF page and compares the two documents">Gemini (recommended)</div>
+              <div class="chip" data-grp="pdfread" data-v="auto" title="Use the PDF's own text where a page has it; Gemini only for scans. Faster, uses less API quota">PDF text first</div>
             </div>
           </div>
         </div>
@@ -478,6 +479,7 @@ function mkBlock(words,ocr,page){
   const ws=[];
   for(const w of words){const k=normWord(w.t);if(!k)continue;ws.push({t:w.t,k,bx:w.bx||null,p:w.p!==undefined?w.p:page,conf:w.conf});}
   if(!ws.length)return null;
+  if(ws.length===1&&isEnum(ws[0].t,''))return null;
   if(ws.length>=2&&isEnum(ws[0].t,ws[1].t))ws[0].skip=true;
   const dw=ws.filter(w=>!w.skip),key=dw.map(w=>w.k).join(' ');
   return{words:ws,dw,text:ws.map(w=>w.t).join(' '),key,dg:digs(key),ocr:!!ocr,ai:ocr==='ai',page};
@@ -819,7 +821,7 @@ function geminiLines(raw,m,skew,ar){
       let[y0,x0,y1,x1]=bb;if(y1<y0)[y0,y1]=[y1,y0];if(x1<x0)[x0,x1]=[x1,x0];
       if(y1-y0>=2&&x1-x0>=2)box=[Math.max(0,x0)/1000,Math.max(0,y0)/1000,Math.min(1000,x1)/1000,Math.min(1000,y1)/1000];
     }
-    const words=text.split(/\s+/).filter(w=>!/^[|\u00a6]+$/.test(w)).slice(0,400); // stray table-border characters are not words
+    const words=text.split(/\s+/).filter(w=>!/^[|\u00a6]+$/.test(w)&&!/^\[(?:signature|illegible|stamp|logo|handwriting|handwritten|seal)\]$/i.test(w)).slice(0,400); // stray table-border characters are not words
     if(!words.length)continue;
     items.push({text,words,box,valid:!!box});
   }
@@ -836,7 +838,7 @@ function geminiLines(raw,m,skew,ar){
     if(!it.box)continue;
     let pl=null;try{pl=placeLine(it.words,it.box,m);}catch(e){}
     const boxes=pl?pl.boxes:propBoxes(it.words,it.box),band=pl?pl.band:it.box;
-    lines.push({words:it.words.map((t,i)=>({t,box:boxes[i],box0:boxes[i],conf:undefined})),cy:(band[1]+band[3])/2,h:band[3]-band[1],x0:band[0],x1:band[2]});
+    lines.push({words:it.words.map((t,i)=>({t,box:boxes[i],box0:boxes[i],conf:undefined,snapped:!!pl})),cy:(band[1]+band[3])/2,h:band[3]-band[1],x0:band[0],x1:band[2],snapped:!!pl,chars:it.text.length});
   }
   markTab(lines,ar);
   for(const l of lines)for(const w of l.words)w.box=unrotateBox(w.box0,skew,ar); // back to the original (tilted) page for highlighting
@@ -875,7 +877,15 @@ async function readScannedPage(page,vp,items,nChars,hasNative){
       if(small!==dk)small.width=small.height=0;
       const raw=await geminiReadPage(b64);GEM.consec=0;
       const lines=geminiLines(raw,inkMap(dk,1800),skew,ar);
-      if(lines.length)res={lines,ocr:'ai',miss:uncoveredInk(dk,lines)};
+      if(lines.length){
+        res={lines,ocr:'ai',miss:uncoveredInk(dk,lines)};
+        if(!hasNative&&!geomPlausible(lines)){ // positions from the model look wrong: take geometry from local OCR, matched by text
+          try{
+            const tl=await withOcr(()=>ocrBest(dk,skew,ar));
+            res.lines=alignGeminiToOcr(lines,tl,skew,ar);res.geom='ocr';
+          }catch(e){console.warn('geometry fallback failed',e);}
+        }
+      }
     }catch(e){GEM.err=(e&&e.message)||String(e);GEM.fallback++;if((e&&e.fatal)||++GEM.consec>=2)GEM.off=true;}
   }
   if(hasNative){ // forced Gemini on a page that has an exact text layer: never end up worse than that layer
@@ -928,6 +938,248 @@ async function nativeLayerOk(page,vp,lines){
   }catch(e){return true;}
 }
 
+// ── Margin furniture and scan noise ───────────────────────────
+// Numbers down the side of a page, stamp numbers on the edge, page numbers, dust read as characters: none of it is document content.
+function dropMarginNoise(P){
+  const med=a=>{const s=a.slice().sort((x,y)=>x-y);return s.length?s[Math.floor(s.length/2)]:null;};
+  const NUM=/^[\(\[]?\d{1,4}[\)\].:]?$/,GLUE=/^(?:page|of|no\.?|p\.?|pg\.?)$/i;
+  for(const pg of P){
+    const L=pg.lines;if(!L.length)continue;
+    const body=L.filter(l=>l.words.length>=5);
+    const left=body.length>=3?med(body.map(l=>l.x0)):null,right=body.length>=3?med(body.map(l=>l.x1)):null;
+    const leftMin=body.length>=3?Math.min(...body.map(l=>l.x0)):null,rightMax=body.length>=3?Math.max(...body.map(l=>l.x1)):null; // the real text column
+    pg.lines=L.filter(l=>{
+      const txt=l.words.map(w=>w.t).join(' '),alnum=(txt.match(/[\p{L}\p{N}]/gu)||[]).length;
+      if(!alnum)return false;                                                    // rules, dots, stray ticks
+      const numOnly=l.words.length<=3&&alnum<=8&&l.words.every(w=>NUM.test(w.t)||GLUE.test(w.t));
+      if(numOnly&&(l.x1<=.1||l.x0>=.9||l.cy<.06||l.cy>.94))return false;       // numbers in the outer margins and page numbers
+      if(l.words.length<=3&&alnum<=8&&l.words.some(w=>{const b=w.box0||w.box;return b&&(b[0]>=.93||b[2]<=.07);})&&l.words.every(w=>NUM.test(w.t)||!/[\p{L}\p{N}]/u.test(w.t)||((w.t.match(/[\p{L}\p{N}]/gu)||[]).length<=3&&(((w.box0||w.box)||[0])[0]>=.9||((w.box0||w.box)||[1])[2]<=.1))))return false; // a tiny line touching the outer margin
+      const small=l.words.length<=4&&alnum<=10;
+      if(small&&left!==null&&l.x1<left-.03)return false;                         // left gutter: line numbers and ticks outside the text block
+      if(small&&right!==null&&l.x0>right+.03)return false;                       // right gutter
+      if(numOnly&&((rightMax!==null&&l.x1>rightMax+.02)||(leftMin!==null&&l.x0<leftMin-.02)))return false; // a lone number outside the whole text column
+      return true;
+    });
+    // a margin stamp or number that was read as part of a body line: drop just those words (short, numeric-looking, outside the text column, far from the neighbour)
+    if(leftMin!==null)for(const l of pg.lines){
+      if(l.words.length<2)continue;
+      const ws=l.words.filter(w=>w.box0||w.box).slice().sort((a,b)=>(a.box0||a.box)[0]-(b.box0||b.box)[0]);
+      const drop=new Set(),B=w=>w.box0||w.box,numish=w=>/\d/.test(w.t)&&(w.t.match(/[\p{L}\p{N}]/gu)||[]).length<=6;   // numbers only: short real words such as "of" must never be dropped
+      const gaps=[];for(let i=1;i<ws.length;i++)gaps.push(B(ws[i])[0]-B(ws[i-1])[2]);
+      const mg=Math.max(.004,med(gaps.slice().sort((a,b)=>a-b))||0);
+      // a stamp or number read as the last (or first) 1-3 words of a body line: far from the text, short, and NOT sitting in a column of other lines (that would be a table)
+      const inColumn=(a,b)=>L.filter(o=>o!==l&&o.words.some(w=>{const c=B(w);if(!c)return false;const ov=Math.min(b,c[2])-Math.max(a,c[0]);return ov>=.5*(b-a);})).length>=2;
+      for(let n=1;n<=3&&n<ws.length;n++){      // trailing cluster of n words
+        const cl=ws.slice(ws.length-n),g=B(cl[0])[0]-B(ws[ws.length-n-1])[2];
+        if(g>Math.max(.03,3.5*mg)&&B(cl[0])[0]>=.9&&cl.every(numish)&&!inColumn(B(cl[0])[0],B(cl[cl.length-1])[2])){cl.forEach(w=>drop.add(w));break;}
+      }
+      for(let n=1;n<=3&&n<ws.length;n++){      // leading cluster
+        const cl=ws.slice(0,n),g=B(ws[n])[0]-B(cl[n-1])[2];
+        if(g>Math.max(.03,3.5*mg)&&B(cl[n-1])[2]<=.1&&cl.every(numish)&&!inColumn(B(cl[0])[0],B(cl[n-1])[2])){cl.forEach(w=>drop.add(w));break;}
+      }
+      if(drop.size){const keep=l.words.filter(w=>!drop.has(w));if(keep.length)l.words=keep;}
+    }
+  }
+}
+
+// ── Gemini compares the two documents ──────────────────────────
+// Both documents are cut into numbered blocks and given to Gemini, which decides what really changed (ignoring OCR and layout noise).
+// Every change it reports is located back in the real words (so highlights come from the ink-snapped word boxes), checked against the text
+// (an invented or already-present passage is rejected), and anything the local diff found that Gemini did not mention is put to Gemini again as a
+// yes/no question. Local diff = candidate generator; Gemini = judge.
+async function geminiCall(payload,ms){
+  let last=null;
+  for(let a=0;a<2;a++){
+    const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),ms||170000);
+    try{
+      const r=await fetch('/api/gemini',{method:'POST',headers:{'Content-Type':'application/json'},signal:ctl.signal,body:JSON.stringify(payload)});
+      const raw=await r.text();let j={};try{j=JSON.parse(raw);}catch(e){}
+      if(!r.ok){
+        const e=new Error(j.error||`Gemini request failed (${r.status})`);
+        e.fatal=[401,403,404,413].includes(r.status)||/api key|api_key|not configured|permission|billing|unauthori|too large/i.test(e.message);
+        throw e;
+      }
+      return j;
+    }catch(e){
+      last=e&&e.name==='AbortError'?new Error('Gemini timed out'):e;
+      if(last.fatal)break;
+    }finally{clearTimeout(tm);}
+  }
+  throw last;
+}
+function blockListing(blocks,tag){
+  return blocks.map((b,i)=>`${tag}${i}${b.page!=null?` [p${b.page+1}]`:''} ${b.text.slice(0,3000)}`).join('\n');
+}
+const snipTokens=t=>String(t||'').split(/\s+/).map(normWord).filter(Boolean);
+// Find the words of a quoted snippet inside some blocks. Returns {words,score} or null.
+function locate(blocks,idxs,snippet,claimed,ocr){
+  const T=snipTokens(snippet);if(!T.length)return null;
+  const poolOf=ids=>{const P=[];ids.forEach(bi=>{const b=blocks[bi];if(b)b.dw.forEach(w=>P.push(w));});return P;};
+  const need=T.length<=2?1:.75;
+  const run=P=>{
+    if(!P.length)return null;
+    if(T.length>=6&&T.length>=.7*P.length){const sc=wordSim(T,P.map(w=>w.k));if(sc>=.7)return{words:P,score:sc};}
+    let best=null;
+    for(const skipClaimed of[true,false]){
+      for(let i=0;i<P.length;i++){
+        if(!(wordEq(P[i].k,T[0],ocr)||(T[1]&&wordEq(P[i].k,T[1],ocr))))continue;
+        if(skipClaimed&&claimed.has(P[i]))continue;
+        const W=P.slice(i,i+T.length+Math.max(3,Math.ceil(T.length*.25)));
+        const L=lcsEq(W.map(w=>w.k),T,(x,y)=>wordEq(x,y,ocr));
+        if(!L.length)continue;
+        const words=W.slice(L[0][0],L[L.length-1][0]+1),score=L.length/T.length;
+        if(skipClaimed&&words.some(w=>claimed.has(w)))continue;
+        if(!best||score>best.score+1e-9)best={words,score};
+        if(score>=.999)break;
+      }
+      if(best&&best.score>=need)break;
+    }
+    return best&&best.score>=need?best:null;
+  };
+  const n=blocks.length,base=uniq(idxs.filter(i=>i>=0&&i<n));
+  if(base.length){const r=run(poolOf(base));if(r)return r;}
+  const wide=new Set();base.forEach(i=>{for(let d=-2;d<=2;d++)if(i+d>=0&&i+d<n)wide.add(i+d);});
+  if(wide.size){const r=run(poolOf([...wide].sort((a,b)=>a-b)));if(r)return r;}
+  if(T.length>=3){const all=[];for(let i=0;i<n;i++)all.push(i);return run(poolOf(all));}
+  return null;
+}
+const SEV_RANK={low:0,medium:1,high:2,critical:3},SEV_NAME=['low','medium','high','critical'];
+function wordBlockMap(blocks){const m=new Map();blocks.forEach((b,i)=>b.dw.forEach(w=>m.set(w,i)));return m;}
+const phraseKey=ws=>' '+ws.map(w=>w.k).join(' ')+' ';
+// Gemini's change list -> the app's change objects, built from real words.
+function geminiChangesToLocal(gc,ob,nb,ocr,claimedA,claimedB){
+  const out=[],wa=wordBlockMap(ob),wb=wordBlockMap(nb);
+  const keyA=' '+ob.map(b=>b.key).join(' ')+' ',keyB=' '+nb.map(b=>b.key).join(' ')+' ';
+  const ids=(arr,p,n)=>uniq((arr||[]).map(x=>parseInt(String(x).slice(1),10)).filter(i=>Number.isInteger(i)&&i>=0&&i<n));
+  let dropped=0;
+  for(const g of gc){
+    const aIds=ids(g.a_blocks,'A',ob.length),bIds=ids(g.b_blocks,'B',nb.length);
+    const wantOld=g.type!=='added'&&String(g.old_text||'').trim(),wantNew=g.type!=='deleted'&&String(g.new_text||'').trim();
+    let rm=[],ad=[];
+    // a change is only highlighted where its words were actually found; a quote that cannot be found is never widened to a whole paragraph
+    if(wantOld){const r=locate(ob,aIds,g.old_text,claimedA,ocr);if(r)rm=r.words;}
+    if(wantNew){const r=locate(nb,bIds,g.new_text,claimedB,ocr);if(r)ad=r.words;}
+    let type=g.type;
+    if(type==='modified'){
+      if(rm.length&&!ad.length)type='deleted';else if(!rm.length&&ad.length)type='added';
+      else if(rm.length&&ad.length&&phraseKey(rm)===phraseKey(ad)){dropped++;continue;}
+    }
+    if(!rm.length&&!ad.length){dropped++;continue;}                                   // could not be found in the text: not trusted
+    // a "deleted"/"added" passage that is still present in the other document is not deleted/added (short phrases only count when they are a whole block, e.g. a heading)
+    const whole=(ws,wm,bl)=>{const cnt=new Map();ws.forEach(w=>{const i=wm.get(w);cnt.set(i,(cnt.get(i)||0)+1);});return cnt.size>0&&[...cnt].every(([i,n])=>bl[i]&&n>=.9*bl[i].dw.length);};
+    if(type==='deleted'&&(rm.length>=4||whole(rm,wa,ob))&&keyB.includes(phraseKey(rm))){dropped++;continue;}
+    if(type==='added'&&(ad.length>=4||whole(ad,wb,nb))&&keyA.includes(phraseKey(ad))){dropped++;continue;}
+    const tot=rm.length+ad.length,seen=rm.filter(w=>claimedA.has(w)).length+ad.filter(w=>claimedB.has(w)).length;
+    if(tot&&seen/tot>=.8){dropped++;continue;}                                        // already reported
+    rm.forEach(w=>claimedA.add(w));ad.forEach(w=>claimedB.add(w));
+    const oIdx=uniq(rm.length?rm.map(w=>wa.get(w)):aIds),nIdx=uniq(ad.length?ad.map(w=>wb.get(w)):bIds);
+    const c=buildChange(type,rm,ad,oIdx.filter(v=>v!==undefined),nIdx.filter(v=>v!==undefined),0,0,ob,nb);
+    c.summary=g.summary||'';c.gem=true;
+    const r=Math.max(SEV_RANK[c.sev]||0,SEV_RANK[g.impact]||0);c.sev=SEV_NAME[r];
+    out.push(c);
+  }
+  return{changes:out,dropped};
+}
+async function geminiVerify(cands,ob,nb){
+  const keyA=' '+ob.map(b=>b.key).join(' ')+' ',keyB=' '+nb.map(b=>b.key).join(' ')+' ';
+  const items=cands.map((c,i)=>{
+    const rk=' '+snipTokens(c.rmText).join(' ')+' ',ak=' '+snipTokens(c.addText).join(' ')+' ';
+    const inOther=c.type==='deleted'?keyB.includes(rk):c.type==='added'?keyA.includes(ak):c.type==='moved';
+    return{id:i,type:c.type,old:c.rmText,new:c.addText,ctx_old:c.oldText.slice(0,500),ctx_new:c.newText.slice(0,500),in_other:inOther};
+  });
+  const verdict=new Map(),pool=makePool(3),jobs=[];let failed=0,lastErr=null;
+  for(let i=0;i<items.length;i+=40){
+    const part=items.slice(i,i+40);
+    jobs.push(pool(async()=>{
+      try{const r=await geminiCall({mode:'verify',items:part},120000);(r.verdicts||[]).forEach(v=>verdict.set(v.id,v));}
+      catch(e){failed+=part.length;lastErr=e;if(e&&e.fatal)throw e;}
+    }));
+  }
+  await Promise.all(jobs);
+  return{verdict,failed,lastErr};
+}
+async function geminiCompareDocs(oc,nc,local){
+  const ob=oc.blocks,nb=nc.blocks,ocr=ob.some(b=>b.ocr)||nb.some(b=>b.ocr);
+  const stats={gem:0,verified:0,removed:0,unverified:0,dropped:0,compareErr:''};
+  const claimedA=new Set(),claimedB=new Set();
+  let gem=[];
+  const A=blockListing(ob,'A'),B=blockListing(nb,'B');
+  if(A.length<=650000&&B.length<=650000){
+    try{
+      const r=await geminiCall({mode:'compare',a:A,b:B});
+      const g=geminiChangesToLocal(r.changes||[],ob,nb,ocr,claimedA,claimedB);
+      gem=g.changes;stats.dropped=g.dropped;
+    }catch(e){if(e&&e.fatal)throw e;stats.compareErr=(e&&e.message)||'compare failed';}
+  }else stats.compareErr='documents too large for one comparison';
+  stats.gem=gem.length;
+  // candidates from the local diff that Gemini did not account for
+  const left=local.filter(c=>{
+    const ws=[...(c.rmWords||[]),...(c.addWords||[])];if(!ws.length)return true;
+    const seen=ws.filter(w=>claimedA.has(w)||claimedB.has(w)).length;
+    return seen/ws.length<.5;
+  }).slice(0,400);
+  let kept=[];
+  if(left.length){
+    const v=await geminiVerify(left,ob,nb);
+    left.forEach((c,i)=>{
+      const d=v.verdict.get(i);
+      if(!d){c.unverified=true;kept.push(c);stats.unverified++;return;}
+      if(d.real){c.summary=d.summary||'';c.gem=true;kept.push(c);stats.verified++;}else stats.removed++;
+    });
+    if(v.failed&&!stats.unverified&&!gem.length)throw v.lastErr||new Error('Gemini could not check the changes');
+  }
+  const all=[...gem,...kept];
+  const pos=c=>(c.page||0)*1e6+(c.oldIdx>=0?c.oldIdx:Math.max(0,c.newIdx));
+  all.sort((a,b)=>pos(a)-pos(b));all.forEach((c,i)=>c.id=i+1);
+  return{changes:all,stats};
+}
+
+// ── Trust check for model-supplied positions, and content-anchored fallback ─────────
+// Gemini's coordinates are an estimate. If most lines could not be snapped to ink, or the ink width of the snapped lines does not scale with how much
+// text they hold (a sign boxes landed on neighbouring lines), the page geometry is not trusted. Positions then come from local OCR, matched to
+// Gemini's words by their TEXT, so shifts of the printed/scanned content up or down cannot move a highlight onto other words.
+function geomPlausible(lines){
+  const all=lines.reduce((n,l)=>n+l.words.length,0),snap=lines.reduce((n,l)=>n+(l.snapped?l.words.length:0),0);
+  if(all&&snap/all<.8)return false;
+  const rs=lines.filter(l=>l.snapped&&l.chars>=15).map(l=>(l.x1-l.x0)/l.chars);
+  if(rs.length<6)return true;
+  const m=rs.slice().sort((a,b)=>a-b)[Math.floor(rs.length/2)];
+  const off=rs.filter(r=>r<.65*m||r>1.5*m).length;
+  return off/rs.length<=.25;
+}
+function alignGeminiToOcr(gl,tl,skew,ar){
+  const G=[],T=[];
+  gl.forEach((l,li)=>l.words.forEach(w=>{const k=normWord(w.t);if(k)G.push({w,k,li});}));
+  tl.forEach((l,li)=>l.words.forEach(w=>{const k=normWord(w.t);if(k&&w.box0)T.push({w,k,li});}));
+  if(!G.length||!T.length)return gl;
+  const L=lcsEq(G.map(x=>x.k),T.map(x=>x.k),(a,b)=>wordEq(a,b,true));
+  const lis=L.map(([,t])=>T[t].li);
+  const keep=L.filter((_,i)=>{ // a pair whose OCR line disagrees with its neighbours is a coincidence between repeated words
+    const nb=[];for(let d=-4;d<=4;d++)if(d&&lis[i+d]!==undefined)nb.push(lis[i+d]);
+    if(nb.length<3)return true;nb.sort((a,b)=>a-b);return Math.abs(lis[i]-nb[Math.floor(nb.length/2)])<=1;
+  });
+  const gm=new Map(keep);
+  G.forEach((x,gi)=>{const t=gm.get(gi);if(t!==undefined){x.w.box0=T[t].w.box0;x.w.box=T[t].w.box;x.w.conf=T[t].w.conf;x.hit=true;}else x.hit=false;});
+  for(let gi=0;gi<G.length;gi++){ // words OCR missed or misread: place them between their matched neighbours when those share an OCR line
+    if(G[gi].hit)continue;
+    let a=gi-1;while(a>=0&&!G[a].hit)a--;
+    let b=gi;while(b<G.length&&!G[b].hit)b++;
+    const run=G.slice(a+1,b),pa=a>=0?T[gm.get(a)]:null,pb=b<G.length?T[gm.get(b)]:null;
+    if(pa&&pb&&pa.li===pb.li&&pb.w.box0[0]>pa.w.box0[2]){
+      const x0=pa.w.box0[2],x1=pb.w.box0[0],y0=Math.min(pa.w.box0[1],pb.w.box0[1]),y1=Math.max(pa.w.box0[3],pb.w.box0[3]);
+      const tot=run.reduce((n,r)=>n+r.w.t.length+1,0);let acc=0;
+      for(const r of run){const l=x0+(x1-x0)*acc/tot;acc+=r.w.t.length;const rr=x0+(x1-x0)*acc/tot;acc+=1;r.w.box0=[l,y0,Math.max(rr,l+.002),y1];r.w.box=unrotateBox(r.w.box0,skew,ar);r.hit=true;}
+    }else run.forEach(r=>{r.w.box=null;r.w.box0=null;});
+    gi=b-1;
+  }
+  for(const l of gl){ // refresh line geometry from the words' new positions
+    const ws=l.words.filter(w=>w.box0);if(!ws.length)continue;
+    const y0=Math.min(...ws.map(w=>w.box0[1])),y1=Math.max(...ws.map(w=>w.box0[3]));
+    l.x0=Math.min(...ws.map(w=>w.box0[0]));l.x1=Math.max(...ws.map(w=>w.box0[2]));l.cy=(y0+y1)/2;l.h=y1-y0;l.snapped=true;
+  }
+  return gl;
+}
+
 // ── File reading helpers ───────────────────────────────────────
 function readBuf(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsArrayBuffer(file);});}
 function readTxt(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsText(file);});}
@@ -953,7 +1205,7 @@ async function extractPdf(file){
   const pdfDoc=await window.pdfjsLib.getDocument({data:new Uint8Array(buf.slice(0))}).promise;
   const pageCount=pdfDoc.numPages,pages=new Array(pageCount),PL=new Array(pageCount);
   const sel=document.querySelector?document.querySelector('[data-grp="pdfread"].on'):null;
-  const forced=!!sel&&sel.dataset.v==='all';
+  const forced=!sel||sel.dataset.v!=='auto';
   const detail=$('prog-detail'),track=$('prog-page-track'),bar=$('prog-page-bar');
   if(track)track.style.display='block';
   const fb0=GEM.fallback;let done=0,ocrPages=0,aiPages=0,layerIgnored=0;
@@ -987,6 +1239,7 @@ async function extractPdf(file){
     }));
   }
   await Promise.all(jobs);
+  dropMarginNoise(PL);
   stripRunning(PL);
   const blocks=[];PL.forEach((pg,i)=>blocks.push(...linesToBlocks(pg.lines,pg.ocr,i)));
   if(bar)bar.style.width='100%';
@@ -1224,7 +1477,31 @@ function gapChanges(o0,o1,n0,n1,ob,nb,ocr,out,small){
   }
 }
 const uniq=a=>[...new Set(a)].sort((x,y)=>x-y);
-function boxesOf(ws){const r=[];ws.forEach(w=>{if(w.bx)w.bx.forEach(b=>r.push({p:w.p,b}));});return r;}
+function boxesOf(ws){const r=[];ws.forEach(w=>{if(w.bx)w.bx.forEach(b=>r.push({p:w.p,b}));});return mergeRuns(r);}
+// Neighbouring boxes on the same line become one rectangle, so a changed phrase is one highlight, not a row of fragments.
+function mergeRuns(list){
+  const by=new Map();
+  list.forEach(o=>{if(!by.has(o.p))by.set(o.p,[]);by.get(o.p).push(o.b);});
+  const out=[];
+  by.forEach((bs,p)=>{
+    bs=bs.slice().sort((a,b)=>((a[1]+a[3])-(b[1]+b[3]))||(a[0]-b[0]));
+    const lines=[];
+    for(const b of bs){
+      const cy=(b[1]+b[3])/2,h=b[3]-b[1],L=lines.find(l=>Math.abs(l.cy-cy)<.6*Math.max(l.h,h));
+      if(L)L.items.push(b);else lines.push({cy,h,items:[b]});
+    }
+    for(const L of lines){
+      L.items.sort((a,b)=>a[0]-b[0]);let cur=null;
+      for(const b of L.items){
+        const h=Math.max(b[3]-b[1],cur?cur[3]-cur[1]:0);
+        if(cur&&b[0]-cur[2]<=.7*h*1.41)cur=[Math.min(cur[0],b[0]),Math.min(cur[1],b[1]),Math.max(cur[2],b[2]),Math.max(cur[3],b[3])];
+        else{if(cur)out.push({p,b:cur});cur=b.slice();}
+      }
+      if(cur)out.push({p,b:cur});
+    }
+  });
+  return out;
+}
 function anchorOf(blocks,idxs,fallbackIdx){
   const i=idxs.length?idxs[0]:Math.max(0,Math.min(blocks.length-1,fallbackIdx));
   const w=blocks[i]&&blocks[i].words[0];
@@ -1235,6 +1512,7 @@ function emit(oW,nW,forceO,forceN,o0,n0,ob,nb,ocr,out,nbToOb,obToNb){
   if(!oIdx.length)oIdx=uniq(nIdx.map(j=>nbToOb.get(j)).filter(v=>v!==undefined));
   if(!nIdx.length)nIdx=uniq(oIdx.map(i=>obToNb.get(i)).filter(v=>v!==undefined));
   const rmWords=oW.map(x=>x.w),addWords=nW.map(x=>x.w);
+  if(ocr&&!(rmWords.length&&addWords.length)&&[...rmWords,...addWords].every(w=>w.k.length<=1&&!/\d/.test(w.k)))return;
   let type;
   if(rmWords.length&&addWords.length)type='modified';
   else{
@@ -1392,6 +1670,19 @@ async function runCompare(){
     setStage(3);
     await new Promise(r=>setTimeout(r,0));
     S.changes=isXlsx?diffXlsx(oc,nc):diffBlocks(oc.blocks,nc.blocks);
+    S.cmpNote='';S.cmpErr='';
+    if(!isXlsx&&(oc.type==='pdf'||nc.type==='pdf')&&!GEM.off){
+      setStage(3,'Gemini is comparing the documents','Checking every difference, ignoring scan and layout noise…');
+      try{
+        const r=await geminiCompareDocs(oc,nc,S.changes);
+        const st=r.stats;S.changes=r.changes;
+        S.cmpNote=`Gemini compared: ${r.changes.length} change${r.changes.length===1?'':'s'}`+(st.removed?` · ${st.removed} false positive${st.removed===1?'':'s'} removed`:'')+(st.unverified?` · ${st.unverified} unverified`:'');
+        if(st.compareErr){S.cmpNote+=' · full comparison failed, candidates checked one by one';S.cmpErr=st.compareErr;}
+      }catch(e){
+        console.warn('Gemini compare failed',e);
+        S.cmpNote='Gemini compare unavailable: local result shown';S.cmpErr=(e&&e.message)||String(e);
+      }
+    }
     const aiP=(oc.aiPageCount||0)+(nc.aiPageCount||0),fbk=(oc.aiFallbacks||0)+(nc.aiFallbacks||0);
     S.aiNote='';S.aiErr='';
     if(aiP)S.aiNote=`Gemini read ${aiP} page${aiP>1?'s':''}`;
@@ -1438,6 +1729,7 @@ function buildViewer(){
   if(cnt.date)mr.innerHTML+=`<span class="mpill mp-date">${cnt.date} date</span>`;
   if(cnt.financial)mr.innerHTML+=`<span class="mpill mp-fin">${cnt.financial} financial</span>`;
   if(cnt.high)mr.innerHTML+=`<span class="mpill mp-hi">${cnt.high} high impact</span>`;
+  if(S.cmpNote)mr.innerHTML+=`<span class="mpill" title="${esc(S.cmpErr||'')}" style="background:var(--purple-bg);color:var(--purple)">${esc(S.cmpNote)}</span>`;
   if(S.aiNote)mr.innerHTML+=`<span class="mpill" title="${esc(S.aiErr||'')}" style="background:var(--purple-bg);color:var(--purple)">${esc(S.aiNote)}</span>`;
   const fr=$('filter-row');fr.innerHTML='';
   [['all','All'],['added','Added'],['deleted','Deleted'],['modified','Modified'],['numeric','Numeric'],['financial','Financial'],['high_impact','High impact']].forEach(([f,l])=>{
@@ -1703,6 +1995,7 @@ function renderList(){
     if(c.page!==undefined&&c.page!==null)pills+=`<span class="cpill" style="background:var(--card);color:var(--text2)">p.${c.page+1}</span>`;
     if(c.aiSrc)pills+=`<span class="cpill" style="background:var(--purple-bg);color:var(--purple)">Gemini</span>`;
     else if(c.ocr)pills+=`<span class="cpill" style="background:var(--purple-bg);color:var(--purple)">OCR${c.conf!=null?' '+c.conf+'%':''}</span>`;
+    if(c.unverified)pills+=`<span class="cpill" style="background:var(--amber-bg);color:var(--amber)">unverified</span>`;
     if(c.cats?.includes('verify'))pills+=`<span class="cpill" style="background:var(--amber-bg);color:var(--amber)">verify</span>`;
     let preview='';
     if(c.type==='modified'&&c.rmText&&c.addText){
@@ -1715,6 +2008,7 @@ function renderList(){
       preview=`<span style="color:var(--text2)">${esc((c.oldText||c.newText).slice(0,80))}${(c.oldText||c.newText).length>80?'…':''}</span>`;
     }
     d.innerHTML=`<div class="ci-head"><span class="cnum">#${c.id}</span><span class="cbadge ${cbM[c.type]||'cb-mod'}">${c.type}</span><span class="csev ${csM[c.sev]||'cs-low'}">${c.sev}</span></div><div class="ci-text">${preview}</div>${pills?`<div class="ci-pills">${pills}</div>`:''}`;
+    if(c.summary)d.title=c.summary;
     d.addEventListener('click',()=>setActive(c.id));
     cl.appendChild(d);
   });
@@ -1747,6 +2041,7 @@ function renderDetail(ch){
   const oldBox=ch.type!=='added'&&ch.oldText?`<div class="di-col"><div class="di-label">Old</div><div class="di-box di-old">${inlineDiff(ch.oldText,ch.newText,'old')}</div></div>`:'';
   const newBox=ch.type!=='deleted'&&ch.newText?`<div class="di-col"><div class="di-label">New</div><div class="di-box di-new">${inlineDiff(ch.oldText,ch.newText,'new')}</div></div>`:'';
   let chips='';
+  if(ch.summary)chips+=`<span class="dchip" style="background:var(--purple-bg);color:var(--purple)">${esc(ch.summary)}</span>`;
   if(ch.rmText)chips+=`<span class="dchip dch-rm">− ${esc(ch.rmText.slice(0,80))}${ch.rmText.length>80?'…':''}</span>`;
   if(ch.addText)chips+=`<span class="dchip dch-add">+ ${esc(ch.addText.slice(0,80))}${ch.addText.length>80?'…':''}</span>`;
   dp.innerHTML=`<div class="detail-inner"><div class="di-meta"><span class="di-id">Change #${ch.id}</span><span class="cbadge ${cbM[ch.type]||'cb-mod'}">${ch.type}</span><span class="csev ${csM[ch.sev]||'cs-low'}">${ch.sev}</span>${catPills}${ch.sim!==undefined?`<span class="di-sim">${ch.sim}% similar</span>`:''}</div><div class="di-cols">${oldBox}${newBox}</div>${chips?`<div class="di-chips">${chips}</div>`:''}</div>`;
@@ -1760,8 +2055,8 @@ $('btn-prev').addEventListener('click',()=>{const i=S.filtered.findIndex(c=>c.id
 $('btn-next').addEventListener('click',()=>{const i=S.filtered.findIndex(c=>c.id===S.active?.id);if(i<S.filtered.length-1)setActive(S.filtered[i+1].id);});
 $('btn-export').addEventListener('click',()=>{
   if(!S.changes.length)return;
-  const rows=[['#','Type','Severity','Page','OCR','OCR confidence','Sheet','Cell','Categories','Old text','New text','Removed','Added']];
-  S.changes.forEach(c=>rows.push([c.id,c.type,c.sev,c.page!=null?c.page+1:'',c.ocr?'yes':'',c.conf??'',c.sheet||'',c.cellRef||'',(c.cats||[]).join(';'),c.oldText,c.newText,c.rmText,c.addText]));
+  const rows=[['#','Type','Severity','Page','OCR','OCR confidence','Sheet','Cell','Categories','Summary','Old text','New text','Removed','Added']];
+  S.changes.forEach(c=>rows.push([c.id,c.type,c.sev,c.page!=null?c.page+1:'',c.ocr?'yes':'',c.conf??'',c.sheet||'',c.cellRef||'',(c.cats||[]).join(';'),c.summary||'',c.oldText,c.newText,c.rmText,c.addText]));
   const csv=rows.map(r=>r.map(v=>'"'+String(v||'').replace(/"/g,'""')+'"').join(',')).join('\n');
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='diffiq-changes.csv';a.click();
 });
