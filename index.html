@@ -1080,9 +1080,20 @@ function geminiChangesToLocal(gc,ob,nb,ocr,claimedA,claimedB){
     if(type==='added'&&(ad.length>=4||whole(ad,wb,nb))&&keyA.includes(phraseKey(ad))){dropped++;continue;}
     const tot=rm.length+ad.length,seen=rm.filter(w=>claimedA.has(w)).length+ad.filter(w=>claimedB.has(w)).length;
     if(tot&&seen/tot>=.8){dropped++;continue;}                                        // already reported
-    rm.forEach(w=>claimedA.add(w));ad.forEach(w=>claimedB.add(w));
+    rm.forEach(w=>claimedA.add(w));ad.forEach(w=>claimedB.add(w));                    // the whole reported region counts as covered
+    // Gemini reports a region ("this sentence changed"); only the words that actually differ inside it get highlighted
+    let hunkRm=null,hunkAd=null;
+    if(type==='modified'&&rm.length&&ad.length&&rm.length*ad.length<=4e6){
+      const L=lcsEq(rm,ad,(x,y)=>wordEq(x.k,y.k,ocr)),mr=new Set(L.map(([i])=>i)),ma=new Set(L.map(([,j])=>j));
+      const rmU=rm.filter((_,i)=>!mr.has(i)),adU=ad.filter((_,j)=>!ma.has(j));
+      if(!rmU.length&&!adU.length){dropped++;continue;}                               // same words once aligned: not a change
+      const runs=(ws,m)=>{const out=[];let cur=null;ws.forEach((w,i)=>{if(m.has(i)){cur=null;}else{if(!cur){cur=[];out.push(cur);}cur.push(w);}});return out;};
+      hunkRm=runs(rm,mr);hunkAd=runs(ad,ma);
+      rm=rmU;ad=adU;
+    }
     const oIdx=uniq(rm.length?rm.map(w=>wa.get(w)):aIds),nIdx=uniq(ad.length?ad.map(w=>wb.get(w)):bIds);
     const c=buildChange(type,rm,ad,oIdx.filter(v=>v!==undefined),nIdx.filter(v=>v!==undefined),0,0,ob,nb);
+    if(hunkRm||hunkAd){const j=h=>h.map(w=>w.t).join(' ');c.rmText=(hunkRm||[]).map(j).join(' … ');c.addText=(hunkAd||[]).map(j).join(' … ');}
     c.summary=g.summary||'';c.gem=true;
     const r=Math.max(SEV_RANK[c.sev]||0,SEV_RANK[g.impact]||0);c.sev=SEV_NAME[r];
     out.push(c);
