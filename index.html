@@ -1056,7 +1056,7 @@ const SEV_RANK={low:0,medium:1,high:2,critical:3},SEV_NAME=['low','medium','high
 function wordBlockMap(blocks){const m=new Map();blocks.forEach((b,i)=>b.dw.forEach(w=>m.set(w,i)));return m;}
 const phraseKey=ws=>' '+ws.map(w=>w.k).join(' ')+' ';
 // Gemini's change list -> the app's change objects, built from real words.
-function geminiChangesToLocal(gc,ob,nb,ocr,claimedA,claimedB){
+function geminiChangesToLocal(gc,ob,nb,ocr,claimedA,claimedB,chgA,chgB){
   const out=[],wa=wordBlockMap(ob),wb=wordBlockMap(nb);
   const keyA=' '+ob.map(b=>b.key).join(' ')+' ',keyB=' '+nb.map(b=>b.key).join(' ')+' ';
   const ids=(arr,p,n)=>uniq((arr||[]).map(x=>parseInt(String(x).slice(1),10)).filter(i=>Number.isInteger(i)&&i>=0&&i<n));
@@ -1081,6 +1081,12 @@ function geminiChangesToLocal(gc,ob,nb,ocr,claimedA,claimedB){
     const tot=rm.length+ad.length,seen=rm.filter(w=>claimedA.has(w)).length+ad.filter(w=>claimedB.has(w)).length;
     if(tot&&seen/tot>=.8){dropped++;continue;}                                        // already reported
     rm.forEach(w=>claimedA.add(w));ad.forEach(w=>claimedB.add(w));                    // the whole reported region counts as covered
+    // A word the alignment of the two documents matched (a repeated label such as "Name:", a word in a moved block, ...) is not a changed word, whatever region Gemini
+    // drew around it. Only words flagged by BOTH Gemini and the word-level alignment are highlighted.
+    if(chgA&&chgB){
+      rm=rm.filter(w=>chgA.has(w));ad=ad.filter(w=>chgB.has(w));
+      if(!rm.length&&!ad.length){dropped++;continue;}
+    }
     // Gemini reports a region ("this sentence changed"); only the words that actually differ inside it get highlighted
     let hunkRm=null,hunkAd=null;
     if(type==='modified'&&rm.length&&ad.length&&rm.length*ad.length<=4e6){
@@ -1127,7 +1133,9 @@ async function geminiCompareDocs(oc,nc,local){
   if(A.length<=650000&&B.length<=650000){
     try{
       const r=await geminiCall({mode:'compare',a:A,b:B});
-      const g=geminiChangesToLocal(r.changes||[],ob,nb,ocr,claimedA,claimedB);
+      const chgA=new Set(),chgB=new Set();
+      local.forEach(c=>{(c.rmWords||[]).forEach(w=>chgA.add(w));(c.addWords||[]).forEach(w=>chgB.add(w));});
+      const g=geminiChangesToLocal(r.changes||[],ob,nb,ocr,claimedA,claimedB,chgA,chgB);
       gem=g.changes;stats.dropped=g.dropped;
     }catch(e){if(e&&e.fatal)throw e;stats.compareErr=(e&&e.message)||'compare failed';}
   }else stats.compareErr='documents too large for one comparison';
@@ -1486,8 +1494,9 @@ function gapChanges(o0,o1,n0,n1,ob,nb,ocr,out,small){
     }
     a=ia+1;b=ib+1;
   }
+  const mA=new Set(L.map(p=>p[0])),mB=new Set(L.map(p=>p[1]));
   for(const h of hunks){
-    const oW=ow.slice(h.a0,h.a1),nW=nw.slice(h.b0,h.b1);
+    const oW=ow.slice(h.a0,h.a1).filter((_,i)=>!mA.has(h.a0+i)),nW=nw.slice(h.b0,h.b1).filter((_,i)=>!mB.has(h.b0+i));
     if(oW.length&&nW.length)emit(oW,nW,null,null,o0,n0,ob,nb,ocr,out,nbToOb,obToNb);
     else{ // one-sided: split per block so each deleted/added paragraph is its own change
       const src=oW.length?oW:nW,groups=new Map();
