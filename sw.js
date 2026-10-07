@@ -1,4 +1,4 @@
-const CACHE = 'docdiff-v14';
+const CACHE = 'docdiff-v15';
 const STATIC = [
   '/',
   '/index.html',
